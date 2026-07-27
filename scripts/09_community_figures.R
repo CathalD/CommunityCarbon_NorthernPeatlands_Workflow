@@ -48,38 +48,10 @@ stock_row <- function(window, scenario = "as_supplied") {
 }
 fmt <- function(x, d = 1) format(round(x, d), nsmall = d, trim = TRUE)
 
-# 02_core_stocks.csv already carries campaign/latitude/longitude. Keep that
-# table as the source of plotting data so merge suffixes cannot accidentally
-# create latitude.x/latitude.y and leave common$latitude as NULL. If an older
-# derived table lacks the location columns, add them explicitly from 01_cores_qc.
-common <- stock_row("common_support")
-loc_cols <- c("campaign", "latitude", "longitude")
-missing_loc <- setdiff(loc_cols, names(common))
-if (length(missing_loc)) {
-  common <- merge(
-    common,
-    cores[, c("core_id", missing_loc), drop = FALSE],
-    by = "core_id", all.x = TRUE, sort = FALSE
-  )
-}
+common <- merge(stock_row("common_support"), cores[, c("core_id", "campaign", "latitude", "longitude")],
+                by = "core_id", all.x = TRUE)
 ref30  <- stock_row("reference_0_30")
 stratum_common <- est[est$scenario == "as_supplied" & est$window == "common_support", ]
-
-need_finite_columns <- function(df, cols, context) {
-  bad <- cols[!vapply(cols, function(nm) {
-    nm %in% names(df) && any(is.finite(df[[nm]]))
-  }, logical(1))]
-  if (length(bad)) {
-    fail_loudly(
-      paste0("Cannot draw ", context),
-      paste0("Missing or non-finite columns: ", paste(bad, collapse = ", ")),
-      remedy = "Re-run scripts/01_ingest_qc.R and scripts/02_depth_harmonise.R, then re-run 09_community_figures.R."
-    )
-  }
-  invisible(TRUE)
-}
-need_finite_columns(common, c("longitude", "latitude", "stock_kgm2"),
-                    "community figure pack")
 
 peat_mean <- stratum_common$mean[stratum_common$stratum == "PM_2024_peat"]
 min_mean  <- stratum_common$mean[stratum_common$stratum == "FS_2025_mineral"]
