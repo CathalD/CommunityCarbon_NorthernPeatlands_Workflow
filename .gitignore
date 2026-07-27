@@ -1,0 +1,16 @@
+# R
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+
+# Earth Engine rasters are retrieved from Drive, not versioned.
+# The scripts that produce them are versioned instead.
+outputs/gee/*.tif
+outputs/gee/*.tfw
+
+# Python venv used only to read the .numbers source files
+*.numbers
+nbenv/
+
+.DS_Store

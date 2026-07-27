@@ -1,0 +1,6 @@
+"flag","n_rows","meaning"
+"LON_SIGN_REPAIRED",22,"Longitude sign was wrong for the stated study area and was repaired. The supplied value would place this core in the eastern hemisphere."
+"BD_ABOVE_MAX",4,"Dry bulk density exceeds the plausible ceiling for soil; approaches parent-rock density. Suspect a sample-volume or compaction error."
+"DUPLICATE_LAB_VALUES",2,"This sample shares an identical organic matter AND organic carbon pair with a sample from a DIFFERENT core. Possible transcription or copy-paste error."
+"SEGMENT_INDEX_ABSENT",1,"Sample Id carries no trailing integer, so segment order had to be assigned rather than read."
+"SINGLE_SEGMENT_CORE",1,"Core is represented by a single segment, so within-core variability cannot be estimated for it."
