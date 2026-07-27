@@ -1,0 +1,8 @@
+"metric","value"
+"aoi_area_km2",1417.5
+"cell_size_m",100
+"n_cores",8
+"credible_radius_km",2.507
+"pct_aoi_within_credible_radius",8.41
+"area_km2_within_credible_radius",119.2
+"max_dist_to_core_km",26.75

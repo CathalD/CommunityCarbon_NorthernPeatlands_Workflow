@@ -141,6 +141,48 @@ ok(!any(est$trustworthy), "no interval is claimed to be trustworthy at this n")
 ok(all(est$n <= 5), "no stratum has more than 5 cores")
 
 # =============================================================================
+section("09 spatial products")
+# =============================================================================
+r9 <- run("09_spatial_products.R")
+ok(is.null(r9$status), "09 exits cleanly")
+sp <- function(f) file.path(sandbox, "outputs", "spatial", f)
+for (f in c("cores.geojson", "aoi.geojson", "dist_to_nearest_core_m.tif",
+            "nearest_core_index.tif", "DIAGNOSTIC_soc_nearest_core_kgm2.tif",
+            "PRODUCT1b_soc_within_credible_radius_kgm2.tif", "MANIFEST.csv")) {
+  ok(file.exists(sp(f)), paste("09 writes", f))
+}
+
+# Every raster must be a real little-endian TIFF with the magic number, not an
+# empty file that merely has the right extension.
+u16 <- function(r) readBin(r, "integer", size = 2, endian = "little", signed = FALSE)
+for (f in c("dist_to_nearest_core_m.tif", "nearest_core_index.tif",
+            "PRODUCT1b_soc_within_credible_radius_kgm2.tif")) {
+  h <- readBin(sp(f), "raw", n = 8)
+  ok(rawToChar(h[1:2]) == "II" && u16(h[3:4]) == 42L,
+     paste(f, "is a valid TIFF"))
+}
+
+gjson <- paste(readLines(sp("cores.geojson")), collapse = "")
+ok(lengths(regmatches(gjson, gregexpr('"Point"', gjson))) == 8,
+   "cores.geojson carries all 8 cores")
+ok(!grepl("\\[8[0-9]\\.", gjson),
+   "no positive longitude survives into the GeoJSON")
+ok(grepl("stock_0_30_is_lower_bound", gjson),
+   "the lower-bound flag travels with the spatial data")
+
+cvg <- read.csv(tables("09_spatial_coverage.csv"))
+pct <- cvg$value[cvg$metric == "pct_aoi_within_credible_radius"]
+ok(length(pct) == 1 && pct > 0 && pct < 100,
+   "coverage fraction is a real percentage")
+ok(pct < 25, "8 clustered cores cover only a small part of the study area")
+
+man <- read.csv(sp("MANIFEST.csv"))
+ok(any(grepl("DIAGNOSTIC", man$scientific_status)),
+   "the unmasked surface is labelled DIAGNOSTIC, not a product")
+ok(any(grepl("MASKED", man$scientific_status)),
+   "the masked surface is labelled as the only core-derived product")
+
+# =============================================================================
 section("06 against a SYNTHETIC covariate fixture")
 # =============================================================================
 # 03 needs Earth Engine, which CI does not have. This fixture exists purely to

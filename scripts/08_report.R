@@ -379,6 +379,44 @@ if (got(tbl("07_reference_benchmark.csv"))) {
 }
 
 # =============================================================================
+add("## Spatial outputs")
+blank()
+sp_dir <- file.path(CFG$root, "outputs", "spatial")
+if (got(file.path(sp_dir, "MANIFEST.csv"))) {
+  man <- read_csv_verbatim(file.path(sp_dir, "MANIFEST.csv"))
+  add(md_table(man[, c("file", "type", "units", "scientific_status")]))
+  blank()
+}
+if (got(tbl("09_spatial_coverage.csv"))) {
+  cvg <- read_csv_verbatim(tbl("09_spatial_coverage.csv"))
+  gv <- function(k) cvg$value[cvg$metric == k]
+  add("### How much of the study area do eight cores actually speak for?")
+  blank()
+  add("The study area is ", format(round(gv("aoi_area_km2")), big.mark = ","),
+      " km². Taking the credible radius as the median core-to-core spacing (",
+      sprintf("%.1f km", gv("credible_radius_km")),
+      ") — beyond which no core has a neighbour to corroborate it — the eight ",
+      "cores constrain **", sprintf("%.1f%%", gv("pct_aoi_within_credible_radius")),
+      "** of the study area, about ",
+      format(round(gv("area_km2_within_credible_radius")), big.mark = ","),
+      " km². The furthest corner of the AOI is ",
+      sprintf("%.1f km", gv("max_dist_to_core_km")), " from any core.")
+  blank()
+  if (got(tbl("09_coverage_by_distance.csv"))) {
+    add(md_table(read_csv_verbatim(tbl("09_coverage_by_distance.csv")), 2))
+    blank()
+  }
+  add("That single percentage is the most useful spatial result in this ",
+      "workflow. It is an argument for the next field season, not for a ",
+      "better interpolator.")
+  blank()
+}
+add("The rasters are written by a GeoTIFF writer implemented in base R ",
+    "(`R/geotiff.R`), so spatial output does not require GDAL, `terra` or any ",
+    "package install. Output is EPSG:4326, Float32 or Int32, and reads ",
+    "normally in QGIS, ArcGIS and GDAL.")
+blank()
+
 add("## Why no kriged surface")
 blank()
 if (got(tbl("05_spatial_structure.csv")) && got(tbl("05_variogram_binned.csv"))) {

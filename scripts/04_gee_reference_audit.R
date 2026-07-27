@@ -119,57 +119,100 @@ record_audit <- function(...) {
 }
 
 # =============================================================================
-# 2. SoilGrids 2.0 OCS 0-30 cm
+# 2. SoilGrids 2.0 -- built from concentration x bulk density
 # =============================================================================
 
-log_step("04a  SOILGRIDS 2.0 OCS 0-30 cm")
+log_step("04a  SOILGRIDS 2.0 (built from soc_mean x bdod_mean)")
 
-sg_img <- ee$Image(CFG$gee$asset_soilgrids_ocs)
-sg <- probe_layer(sg_img, aoi, "SoilGrids_OCS_0_30")
-log_info("bands: ", paste(sg$bands, collapse = ", "))
-log_info(sprintf("native grid: %.1f m, %s", sg$scale_m, sg$crs))
+# The packaged `ocs_mean` asset is NOT used. Building the stock here from
+# carbon concentration and bulk density makes every step auditable: the depth
+# intervals are explicit, the unit conversion is written out, and the same
+# construction yields 0-30 cm and 0-100 cm on an identical basis. It also
+# mirrors exactly what this workflow does to the community cores, so the
+# comparison is like for like rather than one integration method against
+# another.
+#
+#   soc_mean  is dg/kg   (/10  -> g/kg)
+#   bdod_mean is cg/cm3  (/100 -> g/cm3)
+#   layer OCS (kg C/m2) = (soc/10) * (bdod/100) * thickness_cm / 100
+#
+# Dimensional check, done on paper before trusting the code:
+#   peat at 400 g/kg and 0.20 g/cm3 over 5 cm
+#     = 0.20 g/cm3 * 0.40 gC/g * 5 cm = 0.40 g/cm2 = 4.0 kg C/m2
+#   formula: 400 * 0.20 * 5 / 100 = 4.0   OK
 
-sg_band <- grep("0-30", sg$bands, value = TRUE)[1]
-if (is.na(sg_band)) sg_band <- sg$bands[1]
-log_info("using band: ", sg_band)
+sg_soc  <- ee$Image(CFG$gee$asset_soilgrids_soc)
+sg_bdod <- ee$Image(CFG$gee$asset_soilgrids_bdod)
 
-sg_sel <- sg_img$select(sg_band)
-sg_med <- ee$Number(sg_sel$reduceRegion(
+sg_probe <- probe_layer(sg_soc, aoi, "SoilGrids_soc")
+log_info("soc bands: ", paste(sg_probe$bands, collapse = ", "))
+log_info(sprintf("native grid: %.1f m, %s", sg_probe$scale_m, sg_probe$crs))
+
+sg_layers <- list(
+  list(soc = "soc_0-5cm_mean",    bd = "bdod_0-5cm_mean",    thick = 5,  nm = "ocs_0_5cm"),
+  list(soc = "soc_5-15cm_mean",   bd = "bdod_5-15cm_mean",   thick = 10, nm = "ocs_5_15cm"),
+  list(soc = "soc_15-30cm_mean",  bd = "bdod_15-30cm_mean",  thick = 15, nm = "ocs_15_30cm"),
+  list(soc = "soc_30-60cm_mean",  bd = "bdod_30-60cm_mean",  thick = 30, nm = "ocs_30_60cm"),
+  list(soc = "soc_60-100cm_mean", bd = "bdod_60-100cm_mean", thick = 40, nm = "ocs_60_100cm")
+)
+
+sg_layer_img <- function(l) {
+  sg_soc$select(l$soc)$divide(10)$
+    multiply(sg_bdod$select(l$bd)$divide(100))$
+    multiply(l$thick)$divide(100)$
+    rename(l$nm)
+}
+sg_stack <- Reduce(function(a, b) a$addBands(b), lapply(sg_layers, sg_layer_img))
+
+sg_0_30 <- sg_stack$select(c("ocs_0_5cm", "ocs_5_15cm", "ocs_15_30cm"))$
+  reduce(ee$Reducer$sum())$rename("soilgrids_ocs_0_30_kgm2")
+sg_0_100 <- sg_stack$reduce(ee$Reducer$sum())$rename("soilgrids_ocs_0_100_kgm2")
+
+sg_med <- ee$Number(sg_0_30$reduceRegion(
   ee$Reducer$median(), aoi, 250, maxPixels = 1e12, bestEffort = TRUE
 )$values()$get(0))$getInfo()
-log_info(sprintf("median raw value over AOI: %.3f", sg_med))
+sg_med100 <- ee$Number(sg_0_100$reduceRegion(
+  ee$Reducer$median(), aoi, 250, maxPixels = 1e12, bestEffort = TRUE
+)$values()$get(0))$getInfo()
 
-# SoilGrids OCS is documented as t/ha with a stored scale factor of 10.
-# Test that reading rather than apply it blindly.
-sg_res <- resolve_units(sg_med, list(
-  "raw is t/ha"                = function(v) tha_to_kgm2(v),
-  "raw/10 is t/ha (documented)" = function(v) tha_to_kgm2(v / 10),
-  "raw is kg/m2"               = function(v) v
-), CFG$ref_plausible)
-print_table(sg_res, digits = 3)
+log_info(sprintf("median constructed 0-30 cm stock over AOI : %.2f kg C/m2", sg_med))
+log_info(sprintf("median constructed 0-100 cm stock over AOI: %.2f kg C/m2", sg_med100))
 
-sg_ok <- sg_res[sg_res$consistent_with_0_30 & !sg_res$consistent_with_full, ]
-if (nrow(sg_ok) == 1L) {
-  log_ok("units resolved: ", sg_ok$reading,
-         sprintf("  -> %.2f kg C/m2 over 0-30 cm", sg_ok$implied_kgm2))
-} else {
-  log_warn("units NOT uniquely resolved by plausibility; ",
-           nrow(sg_ok), " readings survive. Applying the DOCUMENTED reading ",
-           "(raw/10 = t/ha) and flagging the ambiguity.")
+# Two internal consistency checks that would catch a wrong scale factor.
+if (sg_med100 < sg_med) {
+  fail_loudly("SoilGrids 0-100 cm stock is smaller than its own 0-30 cm stock",
+              sprintf("0-30 cm: %.2f, 0-100 cm: %.2f", sg_med, sg_med100),
+              "A deeper interval cannot contain less carbon than an interval",
+              "nested inside it. The band scaling or the depth mapping is wrong.",
+              remedy = "Re-check the SoilGrids band names and unit divisors above.")
 }
-# Documented conversion, applied explicitly and named.
-sg_kgm2 <- sg_sel$divide(10)$divide(10)$rename("soilgrids_ocs_0_30_kgm2")
+log_ok("0-100 cm exceeds 0-30 cm, as nesting requires")
+
+if (sg_med <= 0 || sg_med > CFG$ref_plausible$stock_0_30_kgm2_max) {
+  log_warn(sprintf(paste0("Constructed 0-30 cm stock (%.2f kg/m2) is outside ",
+                          "the plausible range (0, %.0f]. Suspect a scale ",
+                          "factor error."), sg_med,
+                   CFG$ref_plausible$stock_0_30_kgm2_max))
+} else {
+  log_ok(sprintf("constructed 0-30 cm stock is physically plausible (%.2f kg/m2)",
+                 sg_med))
+}
+
+sg_kgm2 <- sg_0_30
 
 record_audit(
-  layer = "SoilGrids 2.0 OCS",
-  asset = CFG$gee$asset_soilgrids_ocs,
-  band = sg_band,
-  native_scale_m = sg$scale_m,
+  layer = "SoilGrids 2.0 OCS (constructed)",
+  asset = paste(CFG$gee$asset_soilgrids_soc, "+", CFG$gee$asset_soilgrids_bdod),
+  band = "soc_*_mean x bdod_*_mean, summed 0-5/5-15/15-30",
+  native_scale_m = sg_probe$scale_m,
   median_raw = sg_med,
-  units_applied = "raw/10 = t/ha, then t/ha/10 = kg/m2",
-  depth_support = "0-30 cm (stated in band name and product documentation)",
+  units_applied = "(soc/10 g/kg) x (bdod/100 g/cm3) x thickness_cm / 100 = kg C/m2",
+  depth_support = "0-30 cm (constructed from the three nested intervals)",
   comparable_to_core_0_30 = TRUE,
-  note = "Depth support matches the reference window. Directly comparable."
+  note = paste0("Built from concentration and bulk density rather than the ",
+                "packaged ocs_mean asset, so the integration matches the one ",
+                "applied to the cores. 0-100 cm median = ",
+                sprintf("%.2f kg/m2.", sg_med100))
 )
 
 # =============================================================================
@@ -178,7 +221,7 @@ record_audit(
 
 log_step("04b  SOTHE ET AL. 2022 CANADA SOC")
 
-so_img <- ee$Image(CFG$gee$asset_sothe2022)
+so_img <- ee$Image(CFG$gee$asset_sothe_sc_0_30)
 so <- probe_layer(so_img, aoi, "Sothe2022")
 log_info("bands: ", paste(so$bands, collapse = ", "))
 log_info(sprintf("native grid: %.1f m, %s", so$scale_m, so$crs))
@@ -189,39 +232,75 @@ so_med <- ee$Number(so_img$select(0)$reduceRegion(
 log_info(sprintf("median raw value over AOI: %.3f", so_med))
 
 so_res <- resolve_units(so_med, list(
-  "raw is t/ha"  = function(v) tha_to_kgm2(v),
-  "raw is kg/m2" = function(v) v
+  "raw is kg/m2 (catalogued)" = function(v) v,
+  "raw is t/ha"               = function(v) tha_to_kgm2(v)
 ), CFG$ref_plausible)
 print_table(so_res, digits = 3)
 
 so_ok <- so_res[so_res$consistent_with_0_30 & !so_res$consistent_with_full, ]
-so_units <- if (nrow(so_ok) == 1L) so_ok$reading else "UNRESOLVED"
-if (so_units == "UNRESOLVED") {
+so_units <- if (nrow(so_ok) == 1L) so_ok$reading else "kg/m2 (catalogued; plausibility ambiguous)"
+if (nrow(so_ok) != 1L) {
   log_warn("Sothe units are not uniquely determined by plausibility alone.")
-  log_warn("Both t/ha and kg/m2 readings fall in a defensible range, or ",
-           "neither does. Resolve against the publication before using this ",
-           "layer quantitatively. Extraction proceeds; the values are ",
-           "carried with an explicit UNRESOLVED marker.")
+  log_warn("The project catalogue records this asset as kg C/m2, so that ",
+           "reading is applied; the ambiguity is recorded in the audit table.")
 }
-so_kgm2 <- if (identical(so_units, "raw is t/ha")) {
-  so_img$select(0)$divide(10)$rename("sothe2022_soc_0_30_kgm2")
-} else {
-  so_img$select(0)$rename("sothe2022_soc_0_30_kgm2")
-}
+so_kgm2 <- so_img$select(0)$rename("sothe2022_soc_0_30_kgm2")
 
 record_audit(
-  layer = "Sothe et al. 2022",
-  asset = CFG$gee$asset_sothe2022,
+  layer = "Sothe et al. 2022 SC 0-30 cm",
+  asset = CFG$gee$asset_sothe_sc_0_30,
   band = so$bands[1],
   native_scale_m = so$scale_m,
   median_raw = so_med,
   units_applied = so_units,
-  depth_support = "0-30 cm (per publication title)",
+  depth_support = "0-30 cm",
   comparable_to_core_0_30 = TRUE,
-  note = paste0("Depth matches the reference window. Units ",
-                if (so_units == "UNRESOLVED") "UNRESOLVED - see warning." else
-                  "resolved by plausibility test.")
+  note = paste0("The 0-30 cm cut of the same product whose 0-1 m version is ",
+                "audited below. Same source, different depth support: never ",
+                "mix or average the two.")
 )
+
+# --- the same product at 0-1 m, audited separately ---------------------------
+# Included precisely because it is the easiest mistake available here: two
+# assets from one publication, identical units, silently different depths.
+log_step("04b2  SOTHE ET AL. 2022, 0-1 m (SAME product, DIFFERENT depth)")
+
+so1_ok <- TRUE
+so1_img <- tryCatch(
+  ee$ImageCollection(CFG$gee$asset_sothe_sc_0_100)$first(),
+  error = function(e) { so1_ok <<- FALSE; NULL })
+
+if (!so1_ok || is.null(so1_img)) {
+  log_warn("0-1 m Sothe layer unavailable; skipping. The 0-30 cm audit stands.")
+  so1_med <- NA_real_
+} else {
+  so1 <- probe_layer(so1_img, aoi, "Sothe2022_0_100")
+  so1_med <- ee$Number(so1_img$select(0)$reduceRegion(
+    ee$Reducer$median(), aoi, max(30, so1$scale_m), maxPixels = 1e12,
+    bestEffort = TRUE)$values()$get(0))$getInfo()
+  log_info(sprintf("median 0-1 m stock over AOI: %.2f kg C/m2", so1_med))
+  if (is.finite(so_med) && so1_med < so_med) {
+    log_warn("The 0-1 m layer reads LOWER than the 0-30 cm layer over this ",
+             "AOI, which nesting forbids. Treat both as suspect here.")
+  } else {
+    log_ok(sprintf("0-1 m exceeds 0-30 cm by %.2f kg/m2, as nesting requires",
+                   so1_med - so_med))
+  }
+  record_audit(
+    layer = "Sothe et al. 2022 SC 0-1 m",
+    asset = CFG$gee$asset_sothe_sc_0_100,
+    band = so1$bands[1],
+    native_scale_m = so1$scale_m,
+    median_raw = so1_med,
+    units_applied = "kg/m2 (catalogued)",
+    depth_support = "0-100 cm",
+    comparable_to_core_0_30 = FALSE,
+    note = paste0("SAME publication as the 0-30 cm layer above, DIFFERENT ",
+                  "depth support. Barred from the 0-30 cm comparison. Kept ",
+                  "because it shows how much carbon sits below the 30 cm ",
+                  "window the shallow products report.")
+  )
+}
 
 # =============================================================================
 # 4. Li et al. 2025, Hudson Bay Lowlands peat carbon
@@ -261,6 +340,36 @@ print_table(li_res, digits = 3)
 reads_full_profile <- any(li_res$consistent_with_full &
                           li_res$reading == "raw is kg/m2")
 
+# --- test against the PUBLICATION, not just against plausibility -------------
+# Li et al. (2025) report a Hudson Bay Lowlands mean peat carbon stock of
+# 86 (+/- 35) kg C/m2 over a mean peat depth of 184 (+/- 48) cm. If this asset
+# is the published full-column layer, its central value over a Hudson Bay
+# Lowlands AOI should sit within roughly one standard deviation of that. This
+# is a far sharper test than "is the number big", and it is the check that
+# distinguishes the published product from a mis-scaled or mis-selected band.
+li_mean <- ee$Number(li_img$select(0)$reduceRegion(
+  ee$Reducer$mean(), aoi, max(30, li$scale_m), maxPixels = 1e12,
+  bestEffort = TRUE)$values()$get(0))$getInfo()
+
+lit_mu <- CFG$lit$li_peat_stock_mean_kgm2
+lit_sd <- CFG$lit$li_peat_stock_sd_kgm2
+z_score <- if (is.finite(li_mean)) (li_mean - lit_mu) / lit_sd else NA_real_
+
+log_info("checking the layer against its own publication:")
+log_info(sprintf("   published HBL mean : %.0f +/- %.0f kg C/m2 (Li et al. 2025)",
+                 lit_mu, lit_sd))
+log_info(sprintf("   measured AOI mean  : %.1f kg C/m2", li_mean))
+log_info(sprintf("   deviation          : %+.2f published SD", z_score))
+
+matches_publication <- is.finite(z_score) && abs(z_score) <= 1.5
+if (matches_publication) {
+  log_ok("layer agrees with its publication; the full-column reading is confirmed")
+} else {
+  log_warn("Layer does NOT sit within 1.5 published SD of the reported HBL mean.")
+  log_warn("Either this AOI is genuinely atypical of the Lowlands, or the band ",
+           "selection or scaling is wrong. Resolve before quantitative use.")
+}
+
 log_warn(strrep("-", 68))
 if (reads_full_profile) {
   log_warn("LI ET AL. VALUES ARE TOO LARGE TO BE A 0-30 cm STOCK.")
@@ -270,18 +379,25 @@ if (reads_full_profile) {
   log_warn(sprintf("  our deepest core     : %.1f kg C/m2 over 0-30 cm",
                    max(read_csv_verbatim(
                      file.path(CFG$dir_derived, "02_core_stocks.csv"))$stock_kgm2)))
-  log_warn("  This is a FULL-PROFILE peat carbon stock, integrated over peat")
-  log_warn("  depths of metres. It is NOT the same quantity as a 0-30 cm")
-  log_warn("  stock and MUST NOT be differenced against, averaged with, or")
-  log_warn("  validated by the 0-30 cm products or by these cores.")
-  li_depth <- "FULL PROFILE (peat column); NOT 0-30 cm"
+  log_warn(sprintf("  published peat depth : %.0f +/- %.0f cm",
+                   CFG$lit$li_peat_depth_mean_cm, CFG$lit$li_peat_depth_sd_cm))
+  log_warn("  This is FULL PEAT-COLUMN carbon, integrated from the surface to")
+  log_warn("  the base of the peat -- metres, not centimetres. It is NOT the")
+  log_warn("  same quantity as a 0-30 cm stock and MUST NOT be differenced")
+  log_warn("  against, averaged with, or validated by the 0-30 cm products or")
+  log_warn("  by these cores.")
+  log_warn("")
+  log_warn(sprintf("  For scale: 0-30 cm is %.0f%% of the mean peat depth.",
+                   100 * 30 / CFG$lit$li_peat_depth_mean_cm))
+  li_depth <- "FULL PEAT COLUMN (surface to base of peat); NOT 0-30 cm"
   li_comparable <- FALSE
 } else {
   log_warn("Li et al. values fall within a 0-30 cm plausible range, which")
-  log_warn("contradicts the expectation for a full-profile HBL peat layer.")
-  log_warn("Treat the depth support as UNRESOLVED and confirm against the")
-  log_warn("publication before combining.")
-  li_depth <- "UNRESOLVED"
+  log_warn("contradicts the published full-column basis. Treat the depth")
+  log_warn("support as UNRESOLVED and confirm against the publication before")
+  log_warn("combining. Note that earlier project notes labelled this asset")
+  log_warn("'0-100 cm', which disagrees with the paper's headline map.")
+  li_depth <- "UNRESOLVED (published basis is full column; layer reads shallow)"
   li_comparable <- FALSE
 }
 log_warn(strrep("-", 68))
@@ -299,7 +415,11 @@ record_audit(
   comparable_to_core_0_30 = li_comparable,
   note = paste0("The '30m' in the asset name is pixel size, not depth. ",
                 "Depth support differs from the 0-30 cm window, so this layer ",
-                "is retained as CONTEXT only and is barred from combination.")
+                "is retained as CONTEXT only and is barred from combination. ",
+                sprintf("AOI mean %.1f vs published %.0f +/- %.0f kg/m2 (%+.2f SD); ",
+                        li_mean, lit_mu, lit_sd, z_score),
+                if (matches_publication) "consistent with the publication."
+                else "NOT consistent with the publication -- investigate.")
 )
 
 # =============================================================================
@@ -345,7 +465,27 @@ guard_same_depth_support <- function(audit, layers) {
 
 log_step("04e  EXTRACTION AT CORE LOCATIONS")
 
-ref_stack <- sg_kgm2$addBands(so_kgm2)$addBands(li_kgm2)
+ref_stack <- sg_kgm2$addBands(sg_0_100)$addBands(so_kgm2)$addBands(li_kgm2)
+
+# Per-pixel uncertainty, where the project has access to it. Extracted so the
+# comparison in 07 can ask whether a disagreement exceeds the layer's own
+# stated uncertainty, rather than treating every difference as meaningful.
+li_unc_ok <- TRUE
+li_unc <- tryCatch(
+  ee$Image(CFG$gee$asset_li2025_unc)$select(0)$rename("li2025_peat_carbon_unc_kgm2"),
+  error = function(e) { li_unc_ok <<- FALSE; NULL })
+if (li_unc_ok && !is.null(li_unc)) {
+  ref_stack <- ref_stack$addBands(li_unc)
+  log_ok("included Li et al. per-pixel uncertainty band")
+} else {
+  log_warn("Li uncertainty asset unavailable (private asset not shared?); ",
+           "continuing without it")
+}
+if (exists("so1_img") && !is.null(so1_img)) {
+  ref_stack <- ref_stack$addBands(so1_img$select(0)$rename("sothe2022_soc_0_100_kgm2"))
+  log_ok("included Sothe 0-1 m band (barred from the 0-30 cm comparison)")
+}
+
 samp <- ref_stack$sampleRegions(collection = pts, scale = 30,
                                 geometries = FALSE, tileScale = 4)
 ref_at_cores <- sf::st_drop_geometry(ee_as_sf(samp, maxFeatures = 10000))
