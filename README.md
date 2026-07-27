@@ -48,7 +48,7 @@ R/
 scripts/
   01_ingest_qc.R              read, recompute from first principles, reconcile, flag
   02_depth_harmonise.R        like-for-like depth windows, stocks, lower-bound flags
-  03_gee_covariates.R         rgee: covariate stack + extraction         [needs GEE]
+  03_gee_covariates.R         rgee: buffered covariate stack + extraction [needs GEE]
   04_gee_reference_audit.R    rgee: audit units/depth of published layers [needs GEE]
   05_stratified_estimate.R    PRODUCT 1 and 2; the case against kriging
   06_covariate_model.R        PRODUCT 3 + honest cross-validation        [needs GEE]
@@ -62,6 +62,15 @@ outputs/tables|figures|gee/   tables, and GEE rasters when retrieved
 ```
 
 ---
+
+### Earth Engine covariate extraction note
+
+`03_gee_covariates.R` expands the mapping AOI around the actual core locations
+with a configurable 50 km buffer before compositing and sampling. It also
+unmasks the sampling stack with a no-data sentinel so Earth Engine cannot drop
+an entire core just because one optical/radar/reference band is masked; the
+sentinel is converted back to `NA` in the CSV, and a per-band coverage table is
+written to `outputs/gee/03_covariate_coverage.csv`.
 
 ## Products, and what each one is
 
