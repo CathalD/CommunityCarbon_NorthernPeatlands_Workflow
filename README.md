@@ -11,13 +11,14 @@ estimate with honest uncertainty. Both are produced. A prediction map is
 attempted, tested against a null model, and released only if it passes.
 
 Full findings: **[`outputs/REPORT.md`](outputs/REPORT.md)**.
+Community-facing summary and shareable figures: **[`outputs/COMMUNITY_BRIEF.md`](outputs/COMMUNITY_BRIEF.md)** and `outputs/figures/community_*.png`.
 
 ---
 
 ## Quick start
 
 ```bash
-Rscript run_all.R               # 01, 02, 05, 07, 08  — base R only, ~3 s
+Rscript run_all.R               # 01, 02, 05, 07, 08, 09 — base R only
 Rscript run_all.R --gee         # adds 03, 04, 06     — needs rgee + EE auth
 Rscript tests/test_functions.R  # 73 unit tests
 Rscript tests/test_pipeline.R   # 45 integration tests
@@ -53,6 +54,7 @@ scripts/
   06_covariate_model.R        PRODUCT 3 + honest cross-validation        [needs GEE]
   07_validation_ledger.R      what is validated, what is not, where leakage was possible
   08_report.R                 assembles outputs/REPORT.md
+  09_community_figures.R      creates shareable PNG figures + COMMUNITY_BRIEF.md
 tests/                        unit + integration tests
 data/raw/                     the 22-row core CSV, verbatim headers
 data/derived/                 script outputs
@@ -159,6 +161,25 @@ against physically plausible ranges, and refuses to combine layers whose depth
 support differs.
 
 ---
+
+## Community figure pack
+
+The simplified communication workflow now ends with `09_community_figures.R`,
+which produces a plain-language brief and four PNGs for meetings, slides and
+printouts:
+
+1. `community_01_core_locations.png` — where the peat/wetland and
+   mineral/forest cores are located.
+2. `community_02_core_carbon_stocks.png` — what the new cores measured in the
+   shared 0-14.5 cm layer.
+3. `community_03_compare_context.png` — why shallow core values should not be
+   compared directly with full peat-column stocks.
+4. `community_04_conservation_messages.png` — the conservation takeaways.
+
+These figures answer four community questions directly: carbon stock around
+Fort Severn; what the new peat/mineral samples taught us; how the values
+compare with shallow products and full peat-column estimates; and why the
+conservation priority is keeping peat wet and measuring deeper peat stores.
 
 ## Reproducibility
 
