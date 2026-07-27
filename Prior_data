@@ -1,0 +1,417 @@
+/**** ========================================================================
+ * CARBON RESOURCES — Google Earth Engine reference library
+ * ------------------------------------------------------------------------
+ * A single-file catalogue of every carbon-relevant dataset + the carbon
+ * calculation math, pulled out of "Charlie's Place KBA — Forest Carbon
+ * Assessment v4.6" so it can be reused across projects.
+ *
+ * This file is a REFERENCE, not a pipeline. Sourcing it defines asset IDs,
+ * loader functions, and unit-conversion helpers; it does NOT run the RF /
+ * ensemble / sampling analysis (that stays in the assessment script). Nothing
+ * heavy executes on paste — loaders build lazy ee objects only. Call
+ * printReference() to dump the catalogue to the console, or run the DEMO block
+ * at the bottom (default OFF) to visualise a few layers over an AOI.
+ *
+ * ACCESS LEGEND (checked per asset below):
+ *   [PUBLIC] native GEE catalog / community (sat-io) — readable by anyone
+ *   [PRIVATE] project asset — must be shared with the running account
+ *
+ * UNITS CONVENTION: forest/soil carbon densities are kg C / m² unless noted.
+ *   1 kg C/m² = 10 Mg C/ha.  1 Mg/ha (biomass) → carbon via AGB_TO_C_KGM2.
+ * ===================================================================== ****/
+
+
+// ========================================================================
+// SECTION 1 — CARBON UNIT CONVERSIONS  (the calculation core)
+// ========================================================================
+// All biomass products are harmonised to the SAME quantity as the Sothe (2022)
+// forest-carbon map: TOTAL biomass carbon = aboveground + belowground.
+//   C (kg/m²) = AGB(Mg/ha) × (1 + BGB_RATIO) × CARBON_FRACTION × MGHA_TO_KGM2
+//             = AGB(Mg/ha) × AGB_TO_C_KGM2
+var BGB_RATIO       = 0.22;   // belowground:aboveground biomass ratio (national approx.)
+var CARBON_FRACTION = 0.50;   // IPCC dry-biomass carbon fraction
+var MGHA_TO_KGM2    = 0.10;   // Mg/ha → kg/m²
+var AGB_TO_C_KGM2   = (1 + BGB_RATIO) * CARBON_FRACTION * MGHA_TO_KGM2;   // = 0.061
+
+// SCANFI constant σ for ensemble weighting = Guindon 2024 AGB RMSE, carbon-converted.
+var SCANFI_RMSE_AGB_MGHA = 38.70;                                   // t/ha (Guindon 2024)
+var SCANFI_SIGMA_FC      = SCANFI_RMSE_AGB_MGHA * AGB_TO_C_KGM2;    // ≈ 2.361 kg C/m²
+//
+// ⚠ DISCREPANCY CARRIED OVER FROM v4.6 — the source script's HEADER changelog
+//   and its Step-7 comment both state SCANFI σ ≈ 1.935–1.940 kg/m². That is the
+//   OLD v4.4 value (38.70 × 0.1 × 0.5, i.e. aboveground-only, no BGB uplift).
+//   The v4.6 CODE actually computes 38.70 × 0.061 = 2.361 (AGB+BGB). This file
+//   uses the code value (2.361). Confirm which you intend before quoting a σ.
+//
+// ⚠ HARMONISATION CAVEAT — Sothe FC natively includes dead-plant carbon and uses
+//   forest-type-specific root ratios; the single national BGB_RATIO above is an
+//   approximation, so GEDI-RF and SCANFI carbon are only *approximately*
+//   comparable to Sothe FC. Fine for an ensemble prior; state it in any report.
+
+// AGB (Mg/ha) → forest carbon (kg C/m², AGB+BGB). Input is an ee.Image.
+function agbToForestCarbon(agb_mgha) {
+  return ee.Image(agb_mgha).multiply(AGB_TO_C_KGM2);
+}
+
+// Convenience scalar reporting: kg C/m² → Mg C/ha
+function kgm2_to_Mgha(x) { return ee.Number(x).multiply(10); }
+
+
+// ========================================================================
+// SECTION 2 — ASSET IDs  (single source of truth — edit here, not inline)
+// ========================================================================
+
+// ---- 2.1 Boundaries -----------------------------------------------------
+var CANADA_LSIB       = 'USDOS/LSIB_SIMPLE/2017';                                   // [PUBLIC]
+
+// ---- 2.2 Forest / biomass carbon ---------------------------------------
+var SOTHE_FC_COL      = 'projects/sat-io/open-datasets/carbon_stocks_ca/fc';        // [PUBLIC] Sothe FC mirror
+var SCANFI_ASSET      = 'projects/gcpm041u-lemur/assets/scanfi_v12/SCANFI_v1_2';    // [PUBLIC] SCANFI v1.2
+var GEDI_L4A_COL      = 'LARSE/GEDI/GEDI04_A_002_MONTHLY';                          // [PUBLIC] AGB density
+
+// ---- 2.3 Soil carbon ----------------------------------------------------
+var SOTHE_SC_COL      = 'projects/sat-io/open-datasets/carbon_stocks_ca/sc';        // [PUBLIC] Sothe SC mirror (0–1 m)
+var SOTHE_SC30_ASSET  = 'projects/ee-cathalpdoherty2/assets/McMaster_WWFCanada_soil_carbon30cm';  // [PRIVATE] Sothe SC 0–30 cm
+var SG_SOC_ASSET      = 'projects/soilgrids-isric/soc_mean';                        // [PUBLIC] SoilGrids SOC conc.
+var SG_BDOD_ASSET     = 'projects/soilgrids-isric/bdod_mean';                       // [PUBLIC] SoilGrids bulk density
+// Li et al. 2025 — HBL/James Bay peat-column carbon (see depth flag in loader below).
+var LI_PEAT_C_ASSET   = 'projects/ee-cathalpdoherty2/assets/McMasterCarbon30mkgm2version1';       // [PRIVATE] Li 2025 peat C
+
+// ---- 2.4 Per-pixel uncertainty -----------------------------------------
+var SOTHE_FC_UNC      = 'projects/carbon-learning-library/assets/McMasterWWFCanadaforestcarbon250mkgm2uncertaintyversion1';       // [PRIVATE]
+var SOTHE_SC_UNC      = 'projects/carbon-learning-library/assets/McMasterWWFCanadasoilcarbon1muncertainty250mkgm2version3';        // [PRIVATE]
+var LI_PEAT_C_UNC     = 'projects/ee-cathalpdoherty2/assets/McMasterUncertaintyCarbon30mkgm2';    // [PRIVATE] Li 2025 peat C uncertainty
+
+// ---- 2.5 Canopy height --------------------------------------------------
+var GEDI_L2A_COL      = 'LARSE/GEDI/GEDI02_A_002_MONTHLY';                          // [PUBLIC] rh98 etc.
+var SOTHE_CH_COL      = 'projects/sat-io/open-datasets/carbon_stocks_ca/ch';        // [PUBLIC] Sothe CHM
+var META_CH_COL       = 'projects/sat-io/open-datasets/facebook/meta-canopy-height';// [PUBLIC] Meta/WRI 1 m CHM
+// (SCANFI 'height' band also gives a CHM — see scanfi().select('height'))
+
+// ---- 2.6 Wetland / land cover ------------------------------------------
+var GWL_FCS30_COL     = 'projects/sat-io/open-datasets/GWL_FCS30';                  // [PUBLIC] wetland (Zhang 2023)
+var WORLDCOVER_COL    = 'ESA/WorldCover/v200';                                      // [PUBLIC] 10 m LC
+
+// ---- 2.7 Covariates used for the GEDI-RF carbon model ------------------
+var NASADEM_ASSET     = 'NASA/NASADEM_HGT/001';                                     // [PUBLIC] 30 m DEM
+var S2_SR_COL         = 'COPERNICUS/S2_SR_HARMONIZED';                              // [PUBLIC] optical
+var S1_GRD_COL        = 'COPERNICUS/S1_GRD';                                        // [PUBLIC] SAR
+var TERRACLIMATE_COL  = 'IDAHO_EPSCOR/TERRACLIMATE';                                // [PUBLIC] climate
+var SBFI_GRID_FC      = 'projects/sat-io/open-datasets/CA_FOREST/CA_SBFI/GRID_forested_ecosystems'; // [PUBLIC] structure
+var LEAD_SPECIES      = 'projects/sat-io/open-datasets/CA_FOREST/LEAD_TREE_SPECIES';                // [PUBLIC]
+
+// ---- 2.8 Foundation embeddings -----------------------------------------
+var SAT_EMBEDDING_COL = 'GOOGLE/SATELLITE_EMBEDDING/V1/ANNUAL';                     // [PUBLIC] 64-band, 10 m
+
+// ---- 2.9 Field / point profiles (project-private) ----------------------
+var WOSIS_ASSET       = 'projects/north-star-project-470316/assets/wosis_layers_canada'; // [PRIVATE]
+var CANPEAT_ASSET     = 'projects/north-star-project-470316/assets/peat_profiles';       // [PRIVATE]
+var COMBINED_ASSET    = 'projects/north-star-project-470316/assets/combined_profiles';    // [PRIVATE] WOSIS+Peat+Janousek
+
+
+// ========================================================================
+// SECTION 3 — LOADERS  (each returns a ready ee object; metadata in header)
+// All loaders take an AOI geometry so they clip lazily; pass a large region or
+// ee.Geometry for global work. None of these evaluate until you display/print.
+// ========================================================================
+
+// ---- FOREST CARBON ------------------------------------------------------
+
+// Sothe et al. 2022 forest carbon. Native kg C/m² (AGB+BGB+dead), ~2015–2019,
+// 250 m. Mirror is an ImageCollection → .first() is the single national image.
+function sotheForestCarbon(aoi) {
+  return ee.ImageCollection(SOTHE_FC_COL).first().clip(aoi).rename('sothe_fc');
+}
+
+// SCANFI v1.2 (Guindon 2024). 30 m, 2020. band[0] = live aboveground dry tree
+// biomass (Mg/ha); also 'height' (m), land cover, crown closure, species.
+function scanfi(aoi) { return ee.Image(SCANFI_ASSET).clip(aoi); }
+
+// SCANFI AGB → forest carbon (kg C/m², AGB+BGB).
+function scanfiForestCarbon(aoi) {
+  return agbToForestCarbon(scanfi(aoi).select([0])).rename('scanfi_fc');
+}
+
+// GEDI L4A aboveground biomass density (Mg/ha) + its SE, quality-masked,
+// median-composited. Returns bands: agbd (Mg/ha), agbd_se (Mg/ha).
+// NOTE: this is the RAW GEDI product, NOT carbon — apply agbToForestCarbon().
+function gediL4A(aoi, startDate, endDate) {
+  return ee.ImageCollection(GEDI_L4A_COL)
+    .filterDate(startDate, endDate).filterBounds(aoi)
+    .map(function(img) {
+      var q = img.select('l4_quality_flag').eq(1).and(img.select('degrade_flag').eq(0));
+      return img.select(['agbd', 'agbd_se']).updateMask(q);
+    }).median().clip(aoi);
+}
+
+// GEDI L4A → forest carbon (kg C/m², AGB+BGB) + carbon-unit SE.
+function gediForestCarbon(aoi, startDate, endDate) {
+  var g = gediL4A(aoi, startDate, endDate);
+  return agbToForestCarbon(g.select('agbd')).rename('gedi_fc')
+    .addBands(agbToForestCarbon(g.select('agbd_se')).rename('gedi_fc_se'));
+}
+
+// ---- SOIL CARBON --------------------------------------------------------
+
+// Sothe et al. 2022 soil carbon, FULL profile. Native kg C/m², 0–1 m, 250 m.
+function sotheSoilCarbon(aoi) {
+  return ee.ImageCollection(SOTHE_SC_COL).first().clip(aoi).rename('sothe_sc');
+}
+
+// Sothe et al. 2022 soil carbon, 0–30 cm cut (your uploaded asset). kg C/m².
+// ⚠ DEPTH BASIS — this is the SAME Sothe product as sotheSoilCarbon() but a
+//   SHALLOWER interval (0–30 cm vs 0–1 m). Never mix or average the two, and
+//   match whichever you use to your cores' depth support (0–30 cm cores → this).
+function sotheSoilCarbon30(aoi) {                                    // [PRIVATE]
+  return ee.Image(SOTHE_SC30_ASSET).select([0]).clip(aoi).rename('sothe_sc_0_30');
+}
+
+// Li et al. 2025 — Hudson/James Bay peat carbon storage. 30 m, kg C/m².
+// ⚠ DEPTH BASIS — the published product is FULL peat-COLUMN carbon (0 → base of
+//   peat). HBL peat depth averages 184 (±48) cm and mean stock is ~86 (±35)
+//   kg C/m², so this is DEEP total-column peat carbon, NOT a 0–30 cm or even a
+//   0–100 cm layer. It must NEVER be averaged into a fixed shallow-depth soil
+//   ensemble (e.g. the 0–30 cm SoilGrids/Sothe consensus). Peat-class pixels
+//   only. Confirm the exact depth basis of your uploaded band — earlier project
+//   notes labelled it "0–100 cm", which disagrees with the paper's full-column
+//   headline map; verify before using it quantitatively.
+function liPeatCarbon(aoi) {                                         // [PRIVATE]
+  return ee.Image(LI_PEAT_C_ASSET).select([0]).clip(aoi).rename('li_peat_c');
+}
+
+// SoilGrids v2.0 OCS built from SOC concentration + bulk density.
+// UNITS: SoilGrids soc_mean is dg/kg (×10 g/kg); bdod_mean is cg/cm³ (×100 g/cm³).
+//   layer OCS (kg C/m²) = (soc/10 [g/kg]) × (bdod/100 [g/cm³]) × thickness_cm / 100
+// Returns per-layer OCS + a 0–30 cm sum + a 0–100 cm sum (all kg C/m²).
+// (Cross-checked dimensionally: peat SOC 400 g/kg, BD 0.2 g/cm³, 5 cm → 4.0 kg/m². ✓)
+function soilgridsOCS(aoi) {
+  var soc  = ee.Image(SG_SOC_ASSET).clip(aoi);
+  var bdod = ee.Image(SG_BDOD_ASSET).clip(aoi);
+  var layer = function(socB, bdB, thick) {
+    return soc.select(socB).divide(10)
+      .multiply(bdod.select(bdB).divide(100))
+      .multiply(thick).divide(100);
+  };
+  var l = ee.Image([
+    layer('soc_0-5cm_mean',    'bdod_0-5cm_mean',     5).rename('ocs_0_5cm'),
+    layer('soc_5-15cm_mean',   'bdod_5-15cm_mean',   10).rename('ocs_5_15cm'),
+    layer('soc_15-30cm_mean',  'bdod_15-30cm_mean',  15).rename('ocs_15_30cm'),
+    layer('soc_30-60cm_mean',  'bdod_30-60cm_mean',  30).rename('ocs_30_60cm'),
+    layer('soc_60-100cm_mean', 'bdod_60-100cm_mean', 40).rename('ocs_60_100cm')
+  ]);
+  var sum_0_30  = l.select(['ocs_0_5cm', 'ocs_5_15cm', 'ocs_15_30cm'])
+                   .reduce(ee.Reducer.sum()).rename('sg_ocs_0_30cm');
+  var sum_0_100 = l.reduce(ee.Reducer.sum()).rename('sg_ocs_0_100cm');
+  return l.addBands(sum_0_30).addBands(sum_0_100);
+}
+
+// ---- UNCERTAINTY (per-pixel, kg/m²) ------------------------------------
+function sotheFCuncertainty(aoi) {                                    // [PRIVATE]
+  return ee.Image(SOTHE_FC_UNC).select([0]).clip(aoi).rename('sothe_fc_unc');
+}
+function sotheSCuncertainty(aoi) {                                    // [PRIVATE]
+  return ee.Image(SOTHE_SC_UNC).select([0]).clip(aoi).rename('sothe_sc_unc');
+}
+// Li 2025 peat-carbon uncertainty (matches liPeatCarbon; same full-column basis).
+function liPeatUncertainty(aoi) {                                    // [PRIVATE]
+  return ee.Image(LI_PEAT_C_UNC).select([0]).clip(aoi).rename('li_peat_c_unc');
+}
+
+// ---- CANOPY HEIGHT (all metres) ----------------------------------------
+function gediRH98(aoi, startDate, endDate) {
+  return ee.ImageCollection(GEDI_L2A_COL)
+    .filterDate(startDate, endDate).filterBounds(aoi)
+    .map(function(img) {
+      var q = img.select('quality_flag').eq(1).and(img.select('degrade_flag').eq(0));
+      return img.select('rh98').updateMask(q);
+    }).median().clip(aoi).rename('gedi_rh98');
+}
+function sotheCanopyHeight(aoi) {
+  return ee.ImageCollection(SOTHE_CH_COL).filterBounds(aoi).first().clip(aoi)
+           .select([0]).rename('sothe_ch');
+}
+function metaCanopyHeight(aoi) {
+  return ee.ImageCollection(META_CH_COL).filterBounds(aoi).mosaic().clip(aoi).rename('meta_ch');
+}
+
+// ---- WETLAND / LAND COVER ----------------------------------------------
+// GWL_FCS30 (Zhang 2023). Tiled global collection → filterBounds+mosaic for AOI
+// coverage. Class codes: 180 non-wetland · 181 permanent water · 182 swamp ·
+// 183 marsh · 184 flooded flat · 185 saline · 186 mangrove · 187 salt marsh ·
+// 188 tidal flat. WETLAND_CODES below excludes 180 (dry) and 181 (open water).
+var GWL_WETLAND_CODES = [182, 183, 184, 185, 186, 187, 188];
+function gwlWetland(aoi) {
+  return ee.ImageCollection(GWL_FCS30_COL).filterBounds(aoi).mosaic().clip(aoi).rename('gwl');
+}
+function gwlWetlandMask(aoi) {
+  var gwl = gwlWetland(aoi);
+  var ones = GWL_WETLAND_CODES.map(function() { return 1; });
+  return gwl.remap(GWL_WETLAND_CODES, ones, 0).gt(0).rename('wetland');
+}
+// ESA WorldCover v200 (10 m). class 10 = tree cover.
+function worldcover(aoi) {
+  return ee.ImageCollection(WORLDCOVER_COL).first().clip(aoi).rename('worldcover');
+}
+
+// ---- FOUNDATION EMBEDDINGS ---------------------------------------------
+// Google Satellite Embedding (AlphaEarth) — 64-band annual, 10 m. Pass a year
+// or null for a multi-year median.
+function satelliteEmbedding(aoi, year) {
+  var col = ee.ImageCollection(SAT_EMBEDDING_COL).filterBounds(aoi);
+  if (year !== null && year !== undefined) {
+    col = col.filter(ee.Filter.calendarRange(year, year, 'year'));
+  }
+  return col.median().clip(aoi);
+}
+
+// ---- FIELD / POINT PROFILES (project-private) --------------------------
+// COMBINED_ASSET merges datasets under a 'dataset' property:
+//   'WOSIS 2023' · 'Peat Database' (CanPeat) · 'Janousek'
+function fieldProfiles() { return ee.FeatureCollection(COMBINED_ASSET); }   // [PRIVATE]
+
+
+// ========================================================================
+// SECTION 4 — ENSEMBLE MATH  (reusable, product-agnostic)
+// ========================================================================
+// Inverse-variance (precision) weighting: combine N carbon products into one
+// best estimate + a combined σ.  w_i = 1/σ_i² ;  x̄ = Σ(w_i·x_i)/Σ(w_i) ;
+// σ̄ = 1/√Σ(w_i).  Members absent at a pixel contribute zero weight, so the mean
+// is taken over only the members actually present. Mask the result to a minimum
+// member count downstream if you want an "≥k of N" rule.
+//   members = [ {value: ee.Image, sigma: ee.Image}, ... ]  (same units + grid)
+function inverseVarianceMean(members) {
+  var wx = ee.Image(0), w = ee.Image(0);
+  members.forEach(function(m) {
+    var mask = ee.Image(m.value).mask();
+    var wi   = ee.Image(m.sigma).pow(2).pow(-1).multiply(mask).unmask(0);
+    wx = wx.add(ee.Image(m.value).unmask(0).multiply(wi));
+    w  = w.add(wi);
+  });
+  return { mean: wx.divide(w).rename('wmean'), sigma: w.pow(-0.5).rename('wsigma') };
+}
+//
+// ⚠ DERIVED-σ HEURISTIC (from v4.6, for products with no published per-pixel σ,
+//   e.g. SoilGrids OCS): standardise the reference product's σ and the
+//   inter-product disagreement SD to mean 1, average them, rescale to the
+//   reference σ mean. It is a plausibility construction, NOT a validated
+//   uncertainty — flag it wherever the SoilGrids weight matters.
+
+
+// ========================================================================
+// SECTION 5 — CITATIONS & LINKS
+// ========================================================================
+// Sothe FC/SC/CH  — Sothe, C., Gonsamo, A., Arabian, J., Kurz, W.A., Finkelstein,
+//   S.A., & Snider, J. (2022). Large soil carbon storage in terrestrial
+//   ecosystems of Canada. Global Biogeochemical Cycles, 36(2), e2021GB007213.
+//   doi:10.1029/2021GB007213
+//   Catalogue: https://gee-community-catalog.org/projects/scs/
+//   Source data: https://remotesensing-mcmaster.org/data/  |  https://wwf.ca/carbonmap/
+//   NOTE: SOTHE_SC30_ASSET is the 0–30 cm cut of this same product; SOTHE_SC_COL
+//   is the 0–1 m version. Same source, different depth support — do not mix.
+//
+// Li 2025 peat   — Li, Y., Gonsamo, A., Han, D., Rogers, C.A., Finkelstein, S.A.,
+//   Hararuk, O., Waddington, J.M., Barreto, C., McLaughlin, J.W., & Snider, J.
+//   (2025). Peat Depth and Carbon Storage of the Hudson Bay Lowlands, Canada.
+//   Geophysical Research Letters, 52. doi:10.1029/2024GL110679
+//   Full peat-column C; mean depth 184(±48) cm, mean stock ~86(±35) kg C/m², 30 m.
+//
+// SCANFI          — Guindon, L., et al. (2024). A new approach for Spatializing the
+//   Canadian National Forest Inventory (SCANFI) using Landsat dense time series.
+//   Can. J. For. Res. 54(7), 793–815. doi:10.1139/cjfr-2023-0118
+//   Catalogue: https://developers.google.com/earth-engine/datasets/catalog/projects_gcpm041u-lemur_assets_scanfi_v12_SCANFI_v1_2
+//
+// GWL_FCS30       — Zhang, X., et al. (2023). GWL_FCS30: a global 30 m wetland map
+//   with a fine classification system. Earth Syst. Sci. Data, 15, 265–293.
+//   doi:10.5194/essd-15-265-2023
+//   Catalogue: https://gee-community-catalog.org/projects/gwl_fcs/
+//
+// GEDI L2A / L4A  — https://developers.google.com/earth-engine/datasets/catalog/LARSE_GEDI_GEDI02_A_002_MONTHLY
+//                   https://developers.google.com/earth-engine/datasets/catalog/LARSE_GEDI_GEDI04_A_002_MONTHLY
+// SoilGrids 2.0   — https://developers.google.com/earth-engine/datasets/catalog/projects_soilgrids-isric_soc_mean  (+ _bdod_mean)
+// ESA WorldCover  — https://developers.google.com/earth-engine/datasets/catalog/ESA_WorldCover_v200
+// NASADEM         — https://developers.google.com/earth-engine/datasets/catalog/NASA_NASADEM_HGT_001
+// Sentinel-2 SR   — https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_S2_SR_HARMONIZED
+// Sentinel-1 GRD  — https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_S1_GRD
+// TerraClimate    — https://developers.google.com/earth-engine/datasets/catalog/IDAHO_EPSCOR_TERRACLIMATE
+// Sat. Embedding  — https://developers.google.com/earth-engine/datasets/catalog/GOOGLE_SATELLITE_EMBEDDING_V1_ANNUAL
+// LSIB boundaries — https://developers.google.com/earth-engine/datasets/catalog/USDOS_LSIB_SIMPLE_2017
+//
+// Meta CHM · SBFI · LEAD_TREE_SPECIES — sat-io community catalogue
+//   (https://gee-community-catalog.org/). Asset IDs are authoritative above;
+//   confirm the exact catalogue page slug before citing.
+
+
+// ========================================================================
+// SECTION 6 — CONSOLE REFERENCE TABLE
+// ========================================================================
+function printReference() {
+  var rows = [
+    ['DATASET',            'ASSET ID',            'UNITS / NATIVE',                 'RES',   'ACCESS'],
+    ['Sothe FC',           SOTHE_FC_COL,          'kg C/m² AGB+BGB+dead',           '250 m', 'PUBLIC'],
+    ['Sothe SC (0–1 m)',   SOTHE_SC_COL,          'kg C/m² 0–1 m',                  '250 m', 'PUBLIC'],
+    ['Sothe SC (0–30 cm)', SOTHE_SC30_ASSET,      'kg C/m² 0–30 cm',                '250 m', 'PRIVATE'],
+    ['Li 2025 peat C',     LI_PEAT_C_ASSET,       'kg C/m² FULL peat column',       '30 m',  'PRIVATE'],
+    ['Li 2025 peat C unc', LI_PEAT_C_UNC,         'kg C/m² (peat-column σ)',        '30 m',  'PRIVATE'],
+    ['Sothe CH',           SOTHE_CH_COL,          'm (canopy height)',              '250 m', 'PUBLIC'],
+    ['Sothe FC unc',       SOTHE_FC_UNC,          'kg C/m² (per-pixel σ)',          '250 m', 'PRIVATE'],
+    ['Sothe SC unc',       SOTHE_SC_UNC,          'kg C/m² (per-pixel σ)',          '250 m', 'PRIVATE'],
+    ['SCANFI v1.2',        SCANFI_ASSET,          'AGB Mg/ha (band 0) + height',    '30 m',  'PUBLIC'],
+    ['GEDI L4A',           GEDI_L4A_COL,          'AGB Mg/ha + agbd_se',            '25 m',  'PUBLIC'],
+    ['GEDI L2A',           GEDI_L2A_COL,          'rh98 canopy height (m)',         '25 m',  'PUBLIC'],
+    ['SoilGrids SOC',      SG_SOC_ASSET,          'dg/kg (÷10 → g/kg)',             '250 m', 'PUBLIC'],
+    ['SoilGrids BDOD',     SG_BDOD_ASSET,         'cg/cm³ (÷100 → g/cm³)',          '250 m', 'PUBLIC'],
+    ['Meta CHM',           META_CH_COL,           'm (canopy height)',              '1 m',   'PUBLIC'],
+    ['GWL_FCS30 wetland',  GWL_FCS30_COL,         'class code 180–188',             '30 m',  'PUBLIC'],
+    ['ESA WorldCover',     WORLDCOVER_COL,        'LC class (10=tree)',             '10 m',  'PUBLIC'],
+    ['Sat. Embedding',     SAT_EMBEDDING_COL,     '64-band embedding',              '10 m',  'PUBLIC'],
+    ['NASADEM',            NASADEM_ASSET,         'elevation (m)',                  '30 m',  'PUBLIC'],
+    ['Sentinel-2 SR',      S2_SR_COL,             'reflectance',                    '10 m',  'PUBLIC'],
+    ['Sentinel-1 GRD',     S1_GRD_COL,            'VV/VH backscatter (dB)',         '10 m',  'PUBLIC'],
+    ['TerraClimate',       TERRACLIMATE_COL,      'climate (tmmn/tmmx/pr/soil)',    '~4 km', 'PUBLIC'],
+    ['SBFI structure',     SBFI_GRID_FC,          'AGB avg/sd (vector attrs)',      'grid',  'PUBLIC'],
+    ['Lead tree species',  LEAD_SPECIES,          'species class',                  '30 m',  'PUBLIC'],
+    ['WOSIS profiles',     WOSIS_ASSET,           'soil point profiles',            'point', 'PRIVATE'],
+    ['CanPeat profiles',   CANPEAT_ASSET,         'peat point profiles',            'point', 'PRIVATE'],
+    ['Combined profiles',  COMBINED_ASSET,        'WOSIS+Peat+Janousek',            'point', 'PRIVATE']
+  ];
+  print('══ CARBON RESOURCES — dataset catalogue ══════════════════════════');
+  rows.forEach(function(r) { print(r.join('  |  ')); });
+  print('AGB→C factor = ' + AGB_TO_C_KGM2.toFixed(3) +
+        '  ((1+' + BGB_RATIO + ')×' + CARBON_FRACTION + '×' + MGHA_TO_KGM2 + ')');
+  print('SCANFI σ (code value) = ' + SCANFI_SIGMA_FC.toFixed(3) +
+        ' kg/m²  [see discrepancy note in Section 1]');
+  print('1 kg C/m² = 10 Mg C/ha');
+  print('══════════════════════════════════════════════════════════════════');
+}
+printReference();
+
+
+// ========================================================================
+// SECTION 7 — OPTIONAL DEMO  (default OFF; set RUN_DEMO=true + an AOI to use)
+// ========================================================================
+var RUN_DEMO = false;
+if (RUN_DEMO) {
+  // var aoi = ee.Geometry.Point([-87.7, 56.0]).buffer(20000);   // e.g. HBL
+  var aoi = Map.getBounds(true);
+
+  var sotheFC = sotheForestCarbon(aoi);
+  var sotheSC = sotheSoilCarbon(aoi);
+  var sgOCS   = soilgridsOCS(aoi);
+  var scanfiFC= scanfiForestCarbon(aoi);
+
+  var soilVis   = { min: 0, max: 30, palette: ['#fff7bc', '#fe9929', '#993404'] };
+  var forestVis = { min: 0, max: 20, palette: ['#f7fcf5', '#74c476', '#00441b'] };
+
+  Map.addLayer(sotheFC,  forestVis, 'Sothe FC (kg C/m²)', false);
+  Map.addLayer(scanfiFC, forestVis, 'SCANFI FC (kg C/m²)', false);
+  Map.addLayer(sotheSC,  soilVis,   'Sothe SC 0–1 m (kg C/m²)', false);
+  Map.addLayer(sgOCS.select('sg_ocs_0_100cm'), soilVis, 'SoilGrids OCS 0–100 cm (kg C/m²)', false);
+  Map.addLayer(sgOCS.select('sg_ocs_0_30cm'),  soilVis, 'SoilGrids OCS 0–30 cm (kg C/m²)', false);
+
+  // Example ensemble: combine two forest products with constant σ.
+  var ens = inverseVarianceMean([
+    { value: scanfiFC, sigma: ee.Image.constant(SCANFI_SIGMA_FC) },
+    { value: sotheFC,  sigma: sotheFCuncertainty(aoi) }            // needs PRIVATE access
+  ]);
+  Map.addLayer(ens.mean, forestVis, 'Forest inv-var mean (kg C/m²)', false);
+}
