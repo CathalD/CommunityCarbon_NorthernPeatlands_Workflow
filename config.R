@@ -241,7 +241,11 @@ CFG <- local({
       season_years     = 2023:2025,
       s2_cloud_pct     = 40,
 
-      # Output grid.
+      # Output grid and sampling extent.
+      # The GEE AOI is expanded around the actual core locations so covariate
+      # composites cover the whole sampled neighbourhood rather than only the
+      # hand-drawn map box.
+      aoi_buffer_km    = 50,
       export_scale_m   = 30L,
       export_crs       = "EPSG:3979"
     ),

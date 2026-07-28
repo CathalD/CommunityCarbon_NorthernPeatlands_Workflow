@@ -133,11 +133,25 @@ log_ok("geolocation invariant re-checked at the Earth Engine boundary")
 # 1. Geometry
 # =============================================================================
 
-bb  <- CFG$aoi_bbox
+# Start from the configured map box, then expand it around the actual core
+# coordinates. The earlier fixed box was too tight for some remote layers and
+# helped produce masked pixels at six of the eight cores. The buffer is computed
+# in lon/lat degrees only to define a generous rectangular GEE region; all real
+# area/distance work remains in Earth Engine or EPSG:3979 downstream.
+bb0 <- CFG$aoi_bbox
+buf_km <- CFG$gee$aoi_buffer_km
+buf_lat <- buf_km / 111.32
+buf_lon <- buf_km / (111.32 * cos(mean(cores$latitude) * pi / 180))
+bb  <- c(
+  xmin = min(bb0[["xmin"]], min(cores$longitude) - buf_lon),
+  ymin = min(bb0[["ymin"]], min(cores$latitude) - buf_lat),
+  xmax = max(bb0[["xmax"]], max(cores$longitude) + buf_lon),
+  ymax = max(bb0[["ymax"]], max(cores$latitude) + buf_lat)
+)
 aoi <- ee$Geometry$Rectangle(c(bb[["xmin"]], bb[["ymin"]],
                                bb[["xmax"]], bb[["ymax"]]))
-log_info(sprintf("AOI: %.3f..%.3f E, %.3f..%.3f N",
-                 bb[["xmin"]], bb[["xmax"]], bb[["ymin"]], bb[["ymax"]]))
+log_info(sprintf("AOI: %.3f..%.3f E, %.3f..%.3f N (includes %.0f km core buffer)",
+                 bb[["xmin"]], bb[["xmax"]], bb[["ymin"]], bb[["ymax"]], buf_km))
 
 pts <- ee$FeatureCollection(lapply(seq_len(nrow(cores)), function(i) {
   ee$Feature(
@@ -207,7 +221,6 @@ build_s1 <- function(aoi) {
     filter(ee$Filter$eq("instrumentMode", "IW"))$
     filter(ee$Filter$listContains("transmitterReceiverPolarisation", "VV"))$
     filter(ee$Filter$listContains("transmitterReceiverPolarisation", "VH"))$
-    filter(ee$Filter$eq("orbitProperties_pass", "DESCENDING"))$
     filter(ee$Filter$calendarRange(CFG$gee$season_start_doy,
                                    CFG$gee$season_end_doy, "day_of_year"))$
     filter(ee$Filter$calendarRange(min(CFG$gee$season_years),
@@ -219,11 +232,12 @@ build_s1 <- function(aoi) {
   # volume-scattering vegetation better than either band alone.
   med$addBands(med$select("VV")$subtract(med$select("VH"))$rename("VV_VH_diff"))$
     rename(c("s1_vv", "s1_vh", "s1_vv_vh_diff"))$
+    unmask(-9999, FALSE)$
     clip(aoi)
 }
 
 s1 <- build_s1(aoi)
-log_ok("sentinel-1: s1_vv, s1_vh, s1_vv_vh_diff (descending, JUL-AUG median)")
+log_ok("sentinel-1: s1_vv, s1_vh, s1_vv_vh_diff (all passes, JUL-AUG median)")
 
 # =============================================================================
 # 4. Sentinel-2
@@ -265,6 +279,7 @@ build_s2 <- function(aoi) {
   m$select(c("B2", "B3", "B4", "B8", "B11", "B12"))$
     rename(c("s2_blue", "s2_green", "s2_red", "s2_nir", "s2_swir1", "s2_swir2"))$
     addBands(ndvi)$addBands(ndwi)$addBands(ndmi)$addBands(tcw)$
+    unmask(-9999, FALSE)$
     clip(aoi)
 }
 
@@ -319,13 +334,15 @@ predictors <- terrain$
   clip(aoi)
 
 # Full stack adds the categorical and embedding layers, which are extracted but
-# ring-fenced from the model.
-stack <- predictors$addBands(worldcover)$addBands(gwl)$addBands(gwl_wetland)$
-  addBands(alphaearth)
+# ring-fenced from the model. sampleRegions drops an entire point if ANY band is
+# masked there; unmasking only for sampling guarantees that all eight cores are
+# returned, while -9999 is converted back to NA before writing the CSV.
+stack <- predictors$addBands(worldcover)$addBands(alphaearth)
+stack_for_sampling <- stack$unmask(-9999, FALSE)$clip(aoi)
 
 log_info("sampling ", nrow(cores), " core locations at ",
          CFG$gee$export_scale_m, " m")
-samp <- stack$sampleRegions(
+samp <- stack_for_sampling$sampleRegions(
   collection = pts,
   scale      = CFG$gee$export_scale_m,
   geometries = FALSE,
@@ -334,6 +351,13 @@ samp <- stack$sampleRegions(
 
 cov_at_cores <- ee_as_sf(samp, maxFeatures = 10000)
 cov_at_cores <- sf::st_drop_geometry(cov_at_cores)
+# Sentinel no-data marker used above so a masked band cannot remove the whole
+# core. Use a tolerance because Earth Engine may return numeric columns.
+num <- vapply(cov_at_cores, is.numeric, logical(1))
+cov_at_cores[num] <- lapply(cov_at_cores[num], function(x) {
+  x[is.finite(x) & abs(x + 9999) < 1e-6] <- NA_real_
+  x
+})
 
 if (nrow(cov_at_cores) != nrow(cores)) {
   log_warn("extraction returned ", nrow(cov_at_cores), " rows for ",
@@ -347,6 +371,25 @@ if (nrow(cov_at_cores) != nrow(cores)) {
 cov_at_cores <- merge(
   cores[, c("core_id", "campaign", "latitude", "longitude")],
   cov_at_cores, by = c("core_id", "campaign"), all.x = TRUE)
+
+coverage <- data.frame(
+  covariate = names(cov_at_cores),
+  n_present = vapply(cov_at_cores, function(x) sum(!is.na(x)), integer(1)),
+  n_cores = nrow(cov_at_cores),
+  stringsAsFactors = FALSE
+)
+coverage <- coverage[!(coverage$covariate %in% c("core_id", "campaign")), ]
+write_csv_logged(coverage,
+                 file.path(CFG$dir_gee, "03_covariate_coverage.csv"),
+                 "per-band non-missing counts after core extraction")
+if (any(coverage$n_present < nrow(cores))) {
+  miss <- coverage[coverage$n_present < nrow(cores), ]
+  log_warn("some covariate bands are still missing at one or more cores; ",
+           "rows are retained and missing cells are NA. See 03_covariate_coverage.csv")
+  print_table(miss, digits = 0)
+} else {
+  log_ok("all covariate bands are present at all core locations")
+}
 
 write_csv_logged(cov_at_cores,
                  file.path(CFG$dir_derived, "03_covariates_at_cores.csv"),
