@@ -27,9 +27,11 @@ args    <- commandArgs(trailingOnly = TRUE)
 use_gee <- "--gee" %in% args
 
 base_scripts <- c("01_ingest_qc.R", "02_depth_harmonise.R",
-                  "05_stratified_estimate.R", "09_spatial_products.R")
+                  "05_stratified_estimate.R", "09_spatial_products.R",
+                  "13_aoi_boundary.R", "14_npdb_context.R")
 gee_scripts  <- c("03_gee_covariates.R", "04_gee_reference_audit.R",
-                  "06_covariate_model.R")
+                  "06_covariate_model.R", "15_landcover_carbon.R",
+                  "16_embedding_clusters.R")
 tail_scripts <- c("07_validation_ledger.R", "08_report.R", "10_community_figures.R",
                   "11_bayesian_map.R", "12_community_report.R")
 

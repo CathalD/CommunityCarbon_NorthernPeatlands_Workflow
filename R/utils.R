@@ -72,6 +72,17 @@ trailing_int <- function(x) {
   out
 }
 
+#' Vectorised, NA-safe truth test.
+#'
+#' Logical columns read from CSV can arrive as character ("TRUE"/"true") or
+#' with NAs. `isTRUE()` is scalar-only and returns FALSE for a vector, which
+#' silently drops every row when used to subset. This does what the name
+#' suggests, elementwise, treating NA as FALSE.
+isTRUE_vec <- function(x) {
+  if (is.logical(x)) return(!is.na(x) & x)
+  !is.na(x) & tolower(as.character(x)) %in% c("true", "t", "1", "yes")
+}
+
 #' Coefficient of variation (%), NA-safe.
 cv_pct <- function(x) {
   x <- x[is.finite(x)]

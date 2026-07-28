@@ -26,9 +26,9 @@ Community-facing summary and shareable figures: **[`outputs/COMMUNITY_BRIEF.md`]
 ## Quick start
 
 ```bash
-Rscript run_all.R               # 01,02,05,09 → 07,08,10,11,12 — base R only
+Rscript run_all.R               # 01,02,05,09,13,14 → 07,08,10,11,12 — base R
 Rscript run_all.R --gee         # adds 03, 04, 06     — needs rgee + EE auth
-Rscript tests/test_functions.R  # 159 unit tests
+Rscript tests/test_functions.R  # 182 unit tests
 Rscript tests/test_pipeline.R   # 108 integration tests
 ```
 
@@ -89,6 +89,48 @@ cores show bulk density rising 4.6× from surface to 30 cm. **The community
 measurement independently corroborates the published regional map at this
 site.**
 
+## Coast-following AOI (script 13)
+
+An axis-aligned box fits a coastal study area badly — it either clips the
+sampled transect or spends most of its area over open water. `13` builds a
+rectangle **aligned to the trend of the shoreline**, and derives that trend
+from the cores' own principal axis rather than drawing it by eye: **142.9°
+from north**, 8° off the NW–SE Hudson Bay coastal trend, with 80% of the core
+variance on that axis. With a 30 km along-axis and 12 km across-axis buffer the
+AOI is **83.6 × 33.0 km = 2,758 km²**, which is 42% of its own axis-aligned
+envelope — so the rotation genuinely earns its keep.
+
+Outputs: `aoi_coast_oriented.geojson`, `aoi_coast_oriented_mask.tif`, and
+`aoi_for_earthengine.js` (a `ee.Geometry.Polygon` literal, so the AOI used
+locally and in GEE are provably the same shape). Override the bearing via
+`CFG$aoi_oriented$bearing_deg`; the script falls back to an axis-aligned box if
+the cores are too clustered for a direction to mean anything.
+
+The coast-relative coordinates it produces expose something the lat/lon view
+hides: **all peat cores sit 3.6–5.1 km to one side of the transect axis and all
+mineral cores 1.0–3.9 km to the other.** Peat-versus-mineral is also
+one-side-versus-the-other, which compounds the campaign confounding.
+
+## National context (script 14)
+
+The AAFC National Pedon Database (9,017 pedons, 349 complete to 30 cm after QC)
+places Fort Severn nationally. Two results:
+
+- **The nearest existing core with a usable 0–30 cm stock is 700 km away, and
+  there are zero within 500 km.** The community cores are not merely few —
+  they are *all there is*. Every published carbon map covering Fort Severn is,
+  in this neighbourhood, extrapolating from hundreds of kilometres away.
+- **The Fort Severn peat/mineral ordering appears nationally, but weakly.**
+  Organic-horizon soils median 6.23 kg C/m² over 0–30 cm vs 7.15 for mineral
+  (Wilcoxon p = 0.031; a random organic core exceeds a random mineral one 43%
+  of the time). The ordering matches, but IQRs overlap heavily and organic
+  soils are simply far more variable (IQR 9.0 vs 4.5). Read as corroboration,
+  not proof. What survives: **a 0–30 cm accounting does not rank peatlands
+  above mineral soils** — depth is what distinguishes them.
+
+The community cores sit at the 24th–89th national percentile, i.e. squarely
+within the national range, which is itself a check on data quality.
+
 ### Peat depth: a substantive field finding
 
 Detecting the peat/mineral contact from the organic-matter profile gives peat
@@ -127,6 +169,10 @@ scripts/
   10_community_figures.R      shareable PNG figures + COMMUNITY_BRIEF.md
   11_bayesian_map.R           PRODUCT 4: published map as prior, cores as data
   12_community_report.R       plain-language outputs/COMMUNITY_REPORT.qmd
+  13_aoi_boundary.R           coast-following oriented AOI (GeoJSON + mask + GEE)
+  14_npdb_context.R           national context from the AAFC Pedon Database
+  15_landcover_carbon.R       carbon per ecosystem type                 [needs GEE]
+  16_embedding_clusters.R     k-means on AlphaEarth embeddings          [needs GEE]
 tests/                        unit + integration tests
 data/raw/                     the 22-row core CSV, verbatim headers
 data/derived/                 script outputs

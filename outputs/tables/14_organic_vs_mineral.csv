@@ -1,0 +1,3 @@
+"group","n","median_kgm2","q25","q75","wilcoxon_p","p_organic_exceeds_mineral"
+"organic horizon present",157,6.22852,2.43,11.43571,0.0306,0.433
+"no organic horizon",192,7.146,5.281575,9.7784,0.0306,0.433
