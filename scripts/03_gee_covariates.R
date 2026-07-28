@@ -294,7 +294,21 @@ log_step("03d  LAND COVER AND EMBEDDINGS")
 
 worldcover <- ee$ImageCollection(CFG$gee$asset_worldcover)$first()$
   select("Map")$rename("worldcover")$clip(aoi)
-log_ok("worldcover: used to define mapping strata in 05, not as a predictor")
+log_ok("worldcover: coarse strata, not a predictor")
+
+# GWL_FCS30 (Zhang et al. 2023) is the better stratum layer for this study.
+# WorldCover cannot separate treed bog on peat from upland forest on mineral
+# soil -- the exact distinction the two campaigns represent -- because both
+# read as tree cover. GWL_FCS30 carries a wetland class system that can.
+gwl <- ee$ImageCollection(CFG$gee$asset_gwl_fcs30)$
+  filterBounds(aoi)$mosaic()$rename("gwl_class")$clip(aoi)
+gwl_wetland <- gwl$remap(CFG$gee$gwl_wetland_codes,
+                         rep(1L, length(CFG$gee$gwl_wetland_codes)), 0)$
+  gt(0)$rename("gwl_wetland")
+log_ok("gwl_fcs30: wetland class + binary wetland mask; the preferred stratum ",
+       "layer for 05")
+log_info("            WorldCover reads treed bog and upland forest alike; ",
+         "GWL_FCS30 separates them, which is the distinction this study needs")
 
 alphaearth <- ee$ImageCollection(CFG$gee$asset_alphaearth)$
   filterBounds(aoi)$
@@ -442,6 +456,18 @@ task_lc <- ee_image_to_drive(
 )
 task_lc$start()
 log_ok("started export: ccnp_worldcover_30m -> Drive/CCNP_SOC")
+
+task_gwl <- ee_image_to_drive(
+  image       = gwl$addBands(gwl_wetland)$toInt16(),
+  description = "ccnp_gwl_fcs30_30m",
+  folder      = "CCNP_SOC",
+  region      = aoi,
+  scale       = CFG$gee$export_scale_m,
+  crs         = CFG$gee$export_crs,
+  maxPixels   = 1e13
+)
+task_gwl$start()
+log_ok("started export: ccnp_gwl_fcs30_30m -> Drive/CCNP_SOC (preferred strata)")
 
 log_info("monitor with rgee::ee_monitoring(), then place the GeoTIFFs in ",
          CFG$dir_gee)

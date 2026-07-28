@@ -161,19 +161,62 @@ CFG <- local({
     # (segments within a core share location, campaign, operator and lab batch).
     cv_unit        = "core",
 
+    # ---- local spatial output --------------------------------------------
+    # Products written by 09_spatial_products.R without Earth Engine, using the
+    # base-R GeoTIFF writer in R/geotiff.R.
+    spatial = list(
+      cell_m    = 100L,        # local raster cell size, metres
+      epsg_out  = 4326L        # geographic; avoids needing a reprojection lib
+    ),
+
     # ---- Google Earth Engine ---------------------------------------------
+    # Asset IDs below are taken from the project's `Prior_data` catalogue
+    # (Carbon Resources GEE reference library). Access is marked because a
+    # PRIVATE asset must be shared with the running account or 04 will fail
+    # with a permissions error rather than a data error.
     gee = list(
       # Set to your own Cloud project before running 03/04.
       project = Sys.getenv("EE_PROJECT", "ee-cathalpdoherty2"),
 
-      # Published reference SOC layers.
-      asset_soilgrids_ocs = "projects/soilgrids-isric/ocs_mean",
-      asset_sothe2022     = paste0("projects/ee-cathalpdoherty2/assets/",
-                                   "McMaster_WWFCanada_soil_carbon30cm"),
-      asset_li2025        = paste0("projects/ee-cathalpdoherty2/assets/",
-                                   "McMasterCarbon30mkgm2version1"),
+      # --- soil carbon reference layers -----------------------------------
+      # SoilGrids 2.0 is built from CONCENTRATION + BULK DENSITY rather than
+      # read from the packaged ocs_mean asset. Doing the integration here means
+      # the depth intervals and the unit conversion are explicit and auditable,
+      # and it yields 0-30 cm and 0-100 cm on the same basis.
+      #   soc_mean  is dg/kg  (divide by 10  -> g/kg)
+      #   bdod_mean is cg/cm3 (divide by 100 -> g/cm3)
+      #   layer OCS (kg C/m2) = (soc/10) * (bdod/100) * thickness_cm / 100
+      asset_soilgrids_soc  = "projects/soilgrids-isric/soc_mean",       # PUBLIC
+      asset_soilgrids_bdod = "projects/soilgrids-isric/bdod_mean",      # PUBLIC
 
-      # Covariate sources. Rationale for each is in 03_gee_covariates.R.
+      # Sothe et al. 2022. TWO depth supports of the SAME product. Never mix.
+      asset_sothe_sc_0_30  = paste0("projects/ee-cathalpdoherty2/assets/",
+                                    "McMaster_WWFCanada_soil_carbon30cm"), # PRIVATE
+      asset_sothe_sc_0_100 = "projects/sat-io/open-datasets/carbon_stocks_ca/sc", # PUBLIC
+      asset_sothe_sc_unc   = paste0("projects/carbon-learning-library/assets/",
+                                    "McMasterWWFCanadasoilcarbon1muncertainty250mkgm2version3"), # PRIVATE
+
+      # Li et al. 2025, Hudson Bay Lowlands. FULL PEAT COLUMN carbon, kg C/m2.
+      # The "30m" in the asset name is PIXEL SIZE, not depth. 04 verifies this
+      # against the pixel grid and the published values in CFG$lit rather than
+      # trusting either the name or this comment.
+      asset_li2025         = paste0("projects/ee-cathalpdoherty2/assets/",
+                                    "McMasterCarbon30mkgm2version1"),     # PRIVATE
+      asset_li2025_unc     = paste0("projects/ee-cathalpdoherty2/assets/",
+                                    "McMasterUncertaintyCarbon30mkgm2"),  # PRIVATE
+
+      # --- comparison context ----------------------------------------------
+      # Merged soil/peat point profiles (WOSIS 2023 + CanPeat + Janousek),
+      # keyed by a 'dataset' property. Used by 10 to place these 8 cores in a
+      # national and global distribution.
+      asset_profiles_combined = paste0("projects/north-star-project-470316/",
+                                       "assets/combined_profiles"),       # PRIVATE
+      asset_profiles_canpeat  = paste0("projects/north-star-project-470316/",
+                                       "assets/peat_profiles"),           # PRIVATE
+      asset_profiles_wosis    = paste0("projects/north-star-project-470316/",
+                                       "assets/wosis_layers_canada"),     # PRIVATE
+
+      # --- covariates. Rationale for each is in 03_gee_covariates.R --------
       asset_dem_arctic    = "UMN/PGC/ArcticDEM/V3/2m_mosaic",
       asset_dem_copernicus= "COPERNICUS/DEM/GLO30",
       asset_s1            = "COPERNICUS/S1_GRD",
@@ -181,6 +224,16 @@ CFG <- local({
       asset_worldcover    = "ESA/WorldCover/v200",
       asset_jrc_water     = "JRC/GSW1_4/GlobalSurfaceWater",
       asset_alphaearth    = "GOOGLE/SATELLITE_EMBEDDING/V1/ANNUAL",
+
+      # GWL_FCS30 (Zhang et al. 2023): a 30 m wetland map with a fine class
+      # system. Preferred over WorldCover for defining peatland strata here,
+      # because WorldCover cannot separate treed bog on peat from upland forest
+      # on mineral soil, which is precisely the distinction this study needs.
+      asset_gwl_fcs30     = "projects/sat-io/open-datasets/GWL_FCS30",
+      # 180 non-wetland | 181 permanent water | 182 swamp | 183 marsh
+      # 184 flooded flat | 185 saline | 186 mangrove | 187 salt marsh
+      # 188 tidal flat.  Wetland codes exclude 180 (dry) and 181 (open water).
+      gwl_wetland_codes   = c(182L, 183L, 184L, 185L, 186L, 187L, 188L),
 
       # Growing-season window for optical/radar compositing at 56 N.
       season_start_doy = 182L,   # 1 July
@@ -197,14 +250,53 @@ CFG <- local({
       export_crs       = "EPSG:3979"
     ),
 
+    # ---- published values used as AUDIT TARGETS ---------------------------
+    # These are not inputs to any estimate. 04 checks each reference layer's
+    # measured statistics against them, so that a mis-specified asset (wrong
+    # band, wrong scaling, wrong depth basis) is caught by disagreeing with its
+    # own publication rather than by looking plausible.
+    lit = list(
+      # Li et al. 2025, GRL, doi:10.1029/2024GL110679
+      li_peat_depth_mean_cm   = 184,
+      li_peat_depth_sd_cm     = 48,
+      li_peat_stock_mean_kgm2 = 86,
+      li_peat_stock_sd_kgm2   = 35,
+      # 1 kg C/m2 = 10 Mg C/ha throughout.
+      kgm2_per_Mgha           = 0.1
+    ),
+
     # ---- reference-layer safety ------------------------------------------
     # Physically plausible ranges (kg C / m2) used by 04 to AUDIT rather than
     # assume the depth support and units of each published layer.
     # A 0-30 cm mineral/peat stock cannot plausibly exceed ~60 kg/m2.
-    # A full-profile HBL peat stock is typically ~50-400 kg/m2.
+    # A full-profile HBL peat stock is typically ~50-400 kg/m2 (Li et al. 2025
+    # report a mean of 86 +/- 35).
     ref_plausible = list(
       stock_0_30_kgm2_max  = 60,
       full_profile_kgm2_min = 50
+    ),
+
+    # ---- citations --------------------------------------------------------
+    citations = c(
+      sothe2022 = paste0("Sothe, C., Gonsamo, A., Arabian, J., Kurz, W.A., ",
+                         "Finkelstein, S.A., & Snider, J. (2022). Large soil ",
+                         "carbon storage in terrestrial ecosystems of Canada. ",
+                         "Global Biogeochemical Cycles, 36(2), e2021GB007213. ",
+                         "doi:10.1029/2021GB007213"),
+      li2025    = paste0("Li, Y., Gonsamo, A., Han, D., Rogers, C.A., ",
+                         "Finkelstein, S.A., Hararuk, O., Waddington, J.M., ",
+                         "Barreto, C., McLaughlin, J.W., & Snider, J. (2025). ",
+                         "Peat Depth and Carbon Storage of the Hudson Bay ",
+                         "Lowlands, Canada. Geophysical Research Letters, 52. ",
+                         "doi:10.1029/2024GL110679"),
+      zhang2023 = paste0("Zhang, X., et al. (2023). GWL_FCS30: a global 30 m ",
+                         "wetland map with a fine classification system. ",
+                         "Earth System Science Data, 15, 265-293. ",
+                         "doi:10.5194/essd-15-265-2023"),
+      soilgrids = paste0("Poggio, L., et al. (2021). SoilGrids 2.0: producing ",
+                         "soil information for the globe with quantified ",
+                         "spatial uncertainty. SOIL, 7, 217-240. ",
+                         "doi:10.5194/soil-7-217-2021")
     )
   )
 })

@@ -117,18 +117,55 @@ spatial_structure <- data.frame(
 
 log_step("05b  PRODUCT 1: STRATIFIED DESIGN-BASED ESTIMATE")
 
-# Area weights would be needed to form a single study-area mean. They come from
-# the stratum raster, which 03 exports. Without it, per-stratum estimates are
-# reported and no study-area number is invented.
+# Area weights are needed to form a single study-area mean. They come from a
+# stratum raster exported by 03. GWL_FCS30 is preferred over WorldCover because
+# WorldCover cannot separate treed bog on peat from upland forest on mineral
+# soil, which is exactly the distinction the two campaigns represent.
+#
+# The class-to-stratum mapping below is a modelling decision, not a fact, and
+# it is stated here rather than buried: see `lookup` in section 3 for the
+# caveats that travel with it.
 area_weights <- NULL
-lc_path <- file.path(CFG$dir_gee, "ccnp_worldcover_30m.tif")
-if (file.exists(lc_path) && requireNamespace("terra", quietly = TRUE)) {
-  r <- terra::rast(lc_path)
+strat_sources <- list(
+  list(path = file.path(CFG$dir_gee, "ccnp_gwl_fcs30_30m.tif"),
+       name = "GWL_FCS30",
+       peat = CFG$gee$gwl_wetland_codes,     # wetland classes -> peat stratum
+       mineral = c(180L)),                   # non-wetland      -> mineral stratum
+  list(path = file.path(CFG$dir_gee, "ccnp_worldcover_30m.tif"),
+       name = "ESA WorldCover",
+       peat = c(30L, 90L),                   # grassland (wet), herbaceous wetland
+       mineral = c(10L, 20L))                # tree cover, shrubland
+)
+strat <- Filter(function(s) file.exists(s$path), strat_sources)
+
+if (length(strat) && requireNamespace("terra", quietly = TRUE)) {
+  src <- strat[[1]]
+  log_info("stratum areas read from ", basename(src$path), " (", src$name, ")")
+  r  <- terra::rast(src$path)[[1]]
   tb <- terra::freq(r)
-  log_info("stratum areas read from ", basename(lc_path))
-  # Mapping from WorldCover classes to our two sampled strata is a modelling
-  # decision and is made explicit in section 3 below.
+  n_peat    <- sum(tb$count[tb$value %in% src$peat],    na.rm = TRUE)
+  n_mineral <- sum(tb$count[tb$value %in% src$mineral], na.rm = TRUE)
+  n_other   <- sum(tb$count, na.rm = TRUE) - n_peat - n_mineral
+
+  if (n_peat > 0 && n_mineral > 0) {
+    area_weights <- c(PM_2024_peat = n_peat, FS_2025_mineral = n_mineral)
+    log_ok(sprintf("stratum composition: peat %.1f%%, mineral %.1f%%, unclassified %.1f%%",
+                   100 * n_peat / sum(tb$count), 100 * n_mineral / sum(tb$count),
+                   100 * n_other / sum(tb$count)))
+    log_info("a study-area mean IS formed, weighted by mapped AREA rather than ",
+             "by how many cores happened to fall in each stratum")
+    if (n_other > 0.2 * sum(tb$count)) {
+      log_warn(sprintf(paste0("%.0f%% of the area falls in neither stratum and ",
+                              "is EXCLUDED from the weighted mean; the study-",
+                              "area figure therefore describes only the mapped ",
+                              "portion."), 100 * n_other / sum(tb$count)))
+    }
+  } else {
+    log_warn("stratum raster present but one stratum has zero mapped area; ",
+             "no study-area mean is formed")
+  }
 } else {
+  lc_path <- strat_sources[[1]]$path
   log_warn("No stratum raster found at ", lc_path)
   log_warn("Per-stratum estimates are reported. NO study-area mean is formed:")
   log_warn("weighting strata by how many cores fell in them would substitute")
@@ -238,23 +275,37 @@ log_warn("     peat/mineral difference this map draws CANNOT be separated")
 log_warn("     from a between-campaign difference. It is a difference")
 log_warn("     between two groups of cores, labelled by landscape.")
 
-if (file.exists(lc_path) && requireNamespace("terra", quietly = TRUE)) {
-  log_info("stratum raster present; writing the assignment map")
-  r  <- terra::rast(lc_path)
-  m  <- terra::classify(r, cbind(c(10, 20, 30, 90),
-                                 c(lookup$mean_stock_kgm2[2],
-                                   lookup$mean_stock_kgm2[2],
-                                   lookup$mean_stock_kgm2[1],
-                                   lookup$mean_stock_kgm2[1])),
-                        others = NA)
+# Rendering the map needs terra only to READ the exported stratum raster.
+# Reading arbitrary GeoTIFFs (tiled, compressed, however GEE wrote them) is
+# well outside what R/geotiff.R attempts, so this step is the one place the
+# workflow genuinely benefits from GDAL.
+if (length(strat) && requireNamespace("terra", quietly = TRUE)) {
+  src <- strat[[1]]
+  log_info("stratum raster present (", src$name, "); writing the assignment map")
+
+  peat_mean    <- lookup$mean_stock_kgm2[lookup$stratum == "PM_2024_peat"]
+  mineral_mean <- lookup$mean_stock_kgm2[lookup$stratum == "FS_2025_mineral"]
+  rcl <- rbind(
+    cbind(src$peat,    rep(peat_mean,    length(src$peat))),
+    cbind(src$mineral, rep(mineral_mean, length(src$mineral)))
+  )
+
+  r <- terra::rast(src$path)[[1]]
+  m <- terra::classify(r, rcl, others = NA)
   names(m) <- "soc_kgm2_class_mean"
   out <- file.path(CFG$dir_gee, "PRODUCT2_stratum_mean_soc_kgm2.tif")
   terra::writeRaster(m, out, overwrite = TRUE)
-  log_ok("wrote ", basename(out))
+  log_ok("wrote ", basename(out), " using the ", src$name, " class mapping")
+  log_warn("Classes outside the mapping are NoData, not zero. A pixel this ",
+           "map leaves blank is one the cores say nothing about.")
+} else if (length(strat)) {
+  log_warn("stratum raster found but `terra` is not installed, so the raster ",
+           "cannot be read; only the legend is written.")
 } else {
   log_info("stratum raster not present, so only the legend is written.")
-  log_info("Run 03_gee_covariates.R, retrieve ccnp_worldcover_30m.tif into ",
-           CFG$dir_gee, ", then re-run this script to render the map.")
+  log_info("Run 03_gee_covariates.R, retrieve ccnp_gwl_fcs30_30m.tif (preferred) ",
+           "or ccnp_worldcover_30m.tif into ", CFG$dir_gee,
+           ", then re-run this script to render the map.")
 }
 
 # =============================================================================

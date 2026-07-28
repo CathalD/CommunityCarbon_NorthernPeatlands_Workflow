@@ -24,13 +24,35 @@ Rscript tests/test_functions.R  # 73 unit tests
 Rscript tests/test_pipeline.R   # 45 integration tests
 ```
 
-**Scripts 01, 02, 05, 07 and 08 require no R packages at all.** That is
-deliberate: the scientifically load-bearing steps — quality control, stock
-computation, stratified estimation, the validation ledger — should run on any R
-installation without a package-install ordeal, because a community-science
-pipeline that partners cannot re-run is not reproducible in any useful sense.
-Only the Earth Engine steps (03, 04) and the model that consumes them (06) need
-`rgee`, and the pipeline completes and reports without them.
+**Scripts 01, 02, 05, 07, 08 and 09 require no R packages at all** — not even
+for spatial output. That is deliberate: the scientifically load-bearing steps —
+quality control, stock computation, stratified estimation, the validation
+ledger, and the GeoTIFFs — should run on any R installation without a
+package-install ordeal, because a community-science pipeline that partners
+cannot re-run is not reproducible in any useful sense. `R/geotiff.R` writes
+valid GeoTIFFs and GeoJSON directly, so GDAL and `terra` are never required to
+produce a map. Only the Earth Engine steps (03, 04) and the model that consumes
+them (06) need `rgee`, and the pipeline completes and reports without them.
+
+## Spatial outputs
+
+`09_spatial_products.R` writes to `outputs/spatial/` and `outputs/figures/`:
+
+| File | Status |
+|------|--------|
+| `cores.geojson` | OBSERVATION — the 8 cores with stocks, flags, depth support |
+| `dist_to_nearest_core_m.tif` | GEOMETRY — exact, no inference |
+| `nearest_core_index.tif` | DIAGNOSTIC — Thiessen assignment |
+| `DIAGNOSTIC_soc_nearest_core_kgm2.tif` | DIAGNOSTIC — **not** a carbon map |
+| `PRODUCT1b_soc_within_credible_radius_kgm2.tif` | SAMPLE-BASED, MASKED |
+| `09_*.png` | quick-look figures |
+
+The masked product is the only core-derived surface this workflow will call a
+product. Taking the credible radius as the median core-to-core spacing
+(2.5 km), **the eight cores constrain 8.4% of the 1,417 km² study area** — 119
+km². The rest is NoData because nothing in the dataset constrains it. That
+number is the argument for the next field season rather than for a better
+interpolator.
 
 ---
 
@@ -159,15 +181,34 @@ the population without seeing the cores.
 
 ---
 
-## The Li et al. 2025 asset name
+## Reference layers (`Prior_data` catalogue)
 
-`McMasterCarbon30mkgm2version1` — the `30` is the **pixel size**, not a depth.
-Read as a depth it would invite a direct comparison against SoilGrids OCS
-0–30 cm, which is a category error: a full-profile HBL peat stock is on the
-order of 50–400 kg C/m² against 3–14 kg C/m² for a 0–30 cm stock. `04` tests
-the reading by measuring the actual pixel grid and checking value magnitudes
-against physically plausible ranges, and refuses to combine layers whose depth
-support differs.
+Asset IDs, units and depth bases come from the project's `Prior_data` GEE
+reference library, ingested into `config.R`. `04_gee_reference_audit.R` still
+verifies each one at runtime rather than trusting the catalogue.
+
+**Li et al. 2025** — `McMasterCarbon30mkgm2version1`: the `30` is the **pixel
+size**, not a depth. The product is **full peat-column** carbon, surface to the
+base of the peat, with a published HBL mean of **86 ± 35 kg C/m² over a mean
+peat depth of 184 ± 48 cm**. Comparing it to a 0–30 cm stock is a category
+error — 30 cm is 16% of the mean peat depth. `04` confirms the pixel grid is
+~30 m, checks the AOI mean against the published mean in standard-deviation
+units, and refuses to combine layers whose depth support differs. (Earlier
+project notes labelled this asset "0–100 cm", which disagrees with the paper;
+the runtime check is what settles it.)
+
+**Sothe et al. 2022** ships at **two depths** — 0–30 cm and 0–1 m — with
+identical units. `04` audits both and bars the 0–1 m layer from the 0–30 cm
+comparison, checking that the deeper layer exceeds the shallower one as nesting
+requires.
+
+**SoilGrids 2.0** is built here from `soc_mean` × `bdod_mean` rather than the
+packaged `ocs_mean`, so the integration matches the one applied to the cores:
+`(soc/10 g/kg) × (bdod/100 g/cm³) × thickness_cm / 100 = kg C/m²`.
+
+**GWL_FCS30** (Zhang et al. 2023) is the preferred stratum layer over ESA
+WorldCover, which reads treed bog on peat and upland forest on mineral soil
+alike — precisely the distinction these two campaigns represent.
 
 ---
 

@@ -260,6 +260,103 @@ ok(near_rel(1.0000001, 1, 1e-6), "accepts within relative tolerance")
 ok(!near_rel(1.1, 1, 1e-6), "rejects outside relative tolerance")
 ok(near_rel(0, 0, 1e-6), "handles zero reference")
 
+# =============================================================================
+section("make_grid")
+# =============================================================================
+bb <- c(xmin = -88.05, ymin = 55.88, xmax = -87.45, ymax = 56.22)
+g <- make_grid(bb, 100)
+ok(g$nx > 0 && g$ny > 0, "grid has positive dimensions")
+ok(abs(g$x[1] - (bb[["xmin"]] + g$xres / 2)) < 1e-12,
+   "first column is a cell CENTRE, half a cell east of the western edge")
+ok(abs(g$y[1] - (bb[["ymax"]] - g$yres / 2)) < 1e-12,
+   "first row is a cell centre, half a cell south of the northern edge")
+ok(all(diff(g$y) < 0), "rows run north to south (raster orientation)")
+ok(all(diff(g$x) > 0), "columns run west to east")
+# Cells should be roughly square on the ground at this latitude.
+ew <- haversine_km(g$x[1], g$lat_mid, g$x[2], g$lat_mid) * 1000
+ns <- haversine_km(0, g$y[1], 0, g$y[2]) * 1000
+ok(abs(ew - 100) < 5 && abs(ns - 100) < 5,
+   "cells are ~100 m on the ground in both directions")
+
+# =============================================================================
+section("write_geotiff -- structural checks (no GDAL needed)")
+# =============================================================================
+tf <- tempfile(fileext = ".tif")
+zz <- matrix(as.numeric(1:35), nrow = 5, ncol = 7, byrow = TRUE)
+write_geotiff(zz, tf, xmin = -88.05, ymax = 56.22, xres = 0.01, yres = 0.005)
+ok(file.exists(tf), "writes a file")
+
+raw_hdr <- readBin(tf, "raw", n = 8)
+ok(rawToChar(raw_hdr[1:2]) == "II", "little-endian byte order marker")
+ok(readBin(raw_hdr[3:4], "integer", size = 2, endian = "little") == 42L,
+   "TIFF magic number 42")
+ifd_off <- readBin(raw_hdr[5:8], "integer", size = 4, endian = "little")
+ok(ifd_off == 8L, "IFD begins immediately after the header")
+
+all_raw <- readBin(tf, "raw", n = file.size(tf))
+# TIFF SHORTs are UNSIGNED. R's readBin defaults to signed, which would turn
+# every tag above 32767 (33550, 34735, 42113 ...) into a negative number.
+u16 <- function(r) readBin(r, "integer", size = 2, endian = "little", signed = FALSE)
+n_ent <- u16(all_raw[9:10])
+ok(n_ent == 16L, "expected number of IFD entries")
+
+tags <- vapply(seq_len(n_ent), function(i) {
+  o <- 10 + (i - 1) * 12
+  u16(all_raw[(o + 1):(o + 2)])
+}, integer(1))
+ok(!is.unsorted(tags), "IFD entries are in ascending tag order (TIFF requires it)")
+ok(all(c(256L, 257L, 258L, 273L, 339L, 33550L, 33922L, 34735L) %in% tags),
+   "all mandatory TIFF and GeoTIFF tags are present")
+
+# File must be exactly header + IFD + payloads + one strip of 4-byte samples.
+ok(file.size(tf) > 35 * 4, "file is at least as large as its pixel payload")
+unlink(tf)
+
+# Round-trip the pixel payload: read the last 35*4 bytes back as float32.
+tf2 <- tempfile(fileext = ".tif")
+write_geotiff(zz, tf2, xmin = 0, ymax = 10, xres = 1, yres = 1)
+sz <- file.size(tf2)
+con <- file(tf2, "rb"); invisible(seek(con, sz - 35 * 4))
+back <- readBin(con, "double", n = 35, size = 4, endian = "little"); close(con)
+eq(back, as.vector(t(zz)), "pixels round-trip in row-major order from the NW corner")
+unlink(tf2)
+
+# =============================================================================
+section(".geo_key_directory")
+# =============================================================================
+gk <- .geo_key_directory(4326, geographic = TRUE)
+ok(gk[1] == 1L && gk[2] == 1L, "GeoKeyDirectory version header")
+ok(gk[4] == (length(gk) - 4) / 4, "declared key count matches the payload")
+keyids <- gk[seq(5, length(gk), by = 4)]
+ok(!is.unsorted(keyids), "geo keys are in ascending KeyID order")
+ok(2048L %in% keyids, "GeographicTypeGeoKey present")
+ok(gk[which(keyids == 2048L) * 4 + 4] == 4326L, "EPSG code is written as 4326")
+
+# =============================================================================
+section("GeoJSON writers")
+# =============================================================================
+gj <- tempfile(fileext = ".geojson")
+dd <- data.frame(longitude = c(-87.6, -87.7), latitude = c(56.0, 56.1),
+                 core_id = c("A", "B"), val = c(1.5, NA),
+                 flag = c(TRUE, FALSE), stringsAsFactors = FALSE)
+write_geojson_points(dd, gj)
+txt <- paste(readLines(gj), collapse = "")
+ok(grepl('"type": *"FeatureCollection"', txt), "writes a FeatureCollection")
+ok(lengths(regmatches(txt, gregexpr('"type": *"Point"', txt))) == 2,
+   "one Point feature per row")
+ok(grepl("-87.6", txt) && grepl("56.1", txt), "coordinates are present")
+ok(grepl('"val": *null', txt), "NA becomes JSON null, not the string NA")
+ok(grepl('"flag": *true', txt), "logicals become JSON booleans")
+unlink(gj)
+
+gb <- tempfile(fileext = ".geojson")
+write_geojson_bbox(bb, gb, props = list(name = "test"))
+tb <- paste(readLines(gb), collapse = "")
+ok(grepl('"Polygon"', tb), "bbox writes a Polygon")
+ok(lengths(regmatches(tb, gregexpr("\\[-88\\.05", tb))) >= 2,
+   "polygon ring is closed (first vertex repeats)")
+unlink(gb)
+
 # ---- summary -----------------------------------------------------------------
 cat("\n", strrep("=", 60), "\n", sep = "")
 cat(sprintf("passed %d   failed %d\n", .pass, .fail))
