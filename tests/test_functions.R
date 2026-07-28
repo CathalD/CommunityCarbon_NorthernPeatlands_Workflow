@@ -662,40 +662,70 @@ ok(is.list(ec) && length(ec) == 3 && identical(ec[[1]], c(1, 4)),
    "ring converts to the nested list Earth Engine expects")
 
 # =============================================================================
-section("Earth Engine download sizing")
+section("Earth Engine download sizing and tiling")
 # =============================================================================
-# The limit is real and was hit in practice: a 19-band predictor stack at 30 m
-# over a 50 km-buffered AOI is far past what one request can return.
-eq(gee_estimate_bytes(area_km2 = 900, scale_m = 30, n_bands = 1),
-   (900 * 1e6 / 900) * 4, "size estimate is pixels x bands x bytes")
-ok(gee_estimate_bytes(2758, 30, 1) / 1024^2 < 20,
-   "one Float32 band at 30 m over the oriented AOI is a modest download")
-ok(gee_estimate_bytes(13600, 30, 1) / 1024^2 > 32,
-   "one band over the 50 km-buffered AOI exceeds the request ceiling")
-ok(gee_estimate_bytes(2758, 30, 19) > gee_estimate_bytes(2758, 30, 1),
+# The real AOI envelope, which is what getDownloadURL actually rasterises.
+aoi_bb <- c(xmin = -88.317, ymin = 55.6799, xmax = -87.0821, ymax = 56.4576)
+
+# Grid dimensions must reflect BOTH traps that made the first estimate wrong.
+d <- gee_grid_dims(aoi_bb, 30, geographic = TRUE)
+ok(abs(d$nx - 4583) < 5 && abs(d$ny - 2887) < 5,
+   "geographic grid dims match Earth Engine's equatorial degree step")
+ok(d$nx / d$ny > 1.5,
+   "longitude is oversampled at 56 N, as EPSG:4326 + scale forces")
+dp <- gee_grid_dims(c(xmin = 0, ymin = 0, xmax = 3000, ymax = 3000), 30,
+                    geographic = FALSE)
+ok(dp$nx == 100 && dp$ny == 100, "projected grid dims are a plain division")
+
+# The estimate must now REACH the size the server reported, not undercut it.
+# Server refused one Float32 band over this envelope at 66,155,605 bytes.
+e1 <- gee_estimate_bytes(aoi_bb, 30, 1)
+ok(e1 > 50e6, "one Float32 band over the envelope is correctly seen as too large")
+ok(abs(e1 - 66155605) / 66155605 < 0.35,
+   "estimate is within 35% of the size Earth Engine actually reported")
+ok(gee_estimate_bytes(aoi_bb, 30, 19) > gee_estimate_bytes(aoi_bb, 30, 1),
    "more bands means more bytes")
-ok(gee_estimate_bytes(2758, 250, 1) < gee_estimate_bytes(2758, 30, 1),
+ok(gee_estimate_bytes(aoi_bb, 250, 1) < gee_estimate_bytes(aoi_bb, 30, 1),
    "a coarser scale means fewer bytes")
 
-# Chunking must produce groups that each fit, and must lose no band.
-bands19 <- paste0("b", 1:19)
-ch <- gee_band_chunks(bands19, area_km2 = 2758, scale_m = 30)
-ok(!is.null(ch), "a 19-band stack can be chunked at 30 m over the oriented AOI")
-ok(identical(sort(unlist(ch, use.names = FALSE)), sort(bands19)),
+# TILING is the fix band-chunking could not provide.
+tl <- gee_tile_bbox(aoi_bb, 30, 1)
+ok(!is.null(tl) && length(tl) > 1L,
+   "a single band too large for one request IS tiled rather than refused")
+ok(all(vapply(tl, function(b)
+       gee_estimate_bytes(b, 30, 1) <= 24 * 1024^2, logical(1))),
+   "every tile fits under the request ceiling")
+# Tiles must cover the box exactly, with no gaps or overlap.
+ok(abs(min(vapply(tl, `[[`, numeric(1), "xmin")) - aoi_bb[["xmin"]]) < 1e-9 &&
+   abs(max(vapply(tl, `[[`, numeric(1), "xmax")) - aoi_bb[["xmax"]]) < 1e-9,
+   "tiles span the full longitude range")
+ok(abs(min(vapply(tl, `[[`, numeric(1), "ymin")) - aoi_bb[["ymin"]]) < 1e-9 &&
+   abs(max(vapply(tl, `[[`, numeric(1), "ymax")) - aoi_bb[["ymax"]]) < 1e-9,
+   "tiles span the full latitude range")
+areas <- sum(vapply(tl, function(b)
+  (b[["xmax"]] - b[["xmin"]]) * (b[["ymax"]] - b[["ymin"]]), numeric(1)))
+full <- (aoi_bb[["xmax"]] - aoi_bb[["xmin"]]) * (aoi_bb[["ymax"]] - aoi_bb[["ymin"]])
+ok(abs(areas - full) / full < 1e-9, "tiles partition the box exactly")
+
+# Something already small enough must NOT be tiled.
+ok(length(gee_tile_bbox(aoi_bb, 250, 1)) == 1L,
+   "a request that already fits is left as one tile")
+# More bands needs more tiles.
+ok(length(gee_tile_bbox(aoi_bb, 30, 19)) >= length(gee_tile_bbox(aoi_bb, 30, 1)),
+   "a 19-band stack needs at least as many tiles as one band")
+# An impossible request returns NULL rather than an absurd tile count.
+ok(is.null(gee_tile_bbox(aoi_bb, 1, 64, max_tiles = 64L)),
+   "refuses rather than emitting an unreasonable number of tiles")
+
+# Band chunking still applies WITHIN a tile.
+tb <- tl[[1]]
+ch <- gee_band_chunks(paste0("b", 1:19), tb, 30)
+ok(!is.null(ch), "bands can be chunked within a tile")
+ok(identical(sort(unlist(ch, use.names = FALSE)), sort(paste0("b", 1:19))),
    "chunking preserves every band exactly once")
 ok(all(vapply(ch, function(g)
-       gee_estimate_bytes(2758, 30, length(g)) <= 32 * 1024^2, logical(1))),
-   "every chunk fits under the request ceiling")
-
-# One band too large to fit must return NULL, not an unusable chunking.
-ok(is.null(gee_band_chunks(c("a", "b"), area_km2 = 13600, scale_m = 30)),
-   "returns NULL when even a single band exceeds the ceiling")
-ok(!is.null(gee_band_chunks(c("a", "b"), area_km2 = 13600, scale_m = 250)),
-   "the same area is downloadable at a coarser scale")
-
-# A single small band should not be split.
-ok(length(gee_band_chunks("one", 2758, 30)) == 1L,
-   "a single small band is one chunk")
+       gee_estimate_bytes(tb, 30, length(g)) <= 24 * 1024^2, logical(1))),
+   "every band chunk within a tile fits")
 
 # =============================================================================
 section("isTRUE_vec")

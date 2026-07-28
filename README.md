@@ -28,7 +28,7 @@ Community-facing summary and shareable figures: **[`outputs/COMMUNITY_BRIEF.md`]
 ```bash
 Rscript run_all.R               # 01,02,05,09,13,14 → 07,08,10,11,12 — base R
 Rscript run_all.R --gee         # adds 03, 04, 06     — needs rgee + EE auth
-Rscript tests/test_functions.R  # 204 unit tests
+Rscript tests/test_functions.R  # 211 unit tests
 Rscript tests/test_pipeline.R   # 131 integration tests
 ```
 
@@ -101,13 +101,25 @@ raster on disk, `11` falls back to a spatially constant regional prior and
 prefixes its outputs `DEMO_`. Downloads land under exactly the filenames `11`
 expects, so re-running it afterwards produces the real Li-prior product.
 
-The one constraint is a hard request-size ceiling (~48 MB). A single Float32
-band at 30 m over the oriented AOI is about 12 MB, so single layers are
-comfortable — but a 19-band predictor stack is not. `gee_band_chunks()`
-estimates the size up front and splits the request into band groups that fit,
-rather than discovering the limit as an opaque server error. If even one band
-is too large it writes nothing and says to coarsen the scale, instead of
-leaving a partial file that looks complete.
+The one constraint is a hard request-size ceiling (50,331,648 bytes).
+Requests are **batched on two axes**: spatially into tiles, and by band group
+within each tile. Tiles are mosaicked back into one file with `terra::vrt()`,
+so downstream code always sees a single raster.
+
+Getting the size estimate right needed two corrections, both found by having
+requests refused at ~5.4× the predicted size:
+
+1. **`getDownloadURL` rasterises the region's bounding box, not the polygon.**
+   The oriented AOI is 2,758 km² but its envelope is 6,629 km² — a factor of
+   2.41 before anything else.
+2. **In EPSG:4326, `scale` is metres at the equator applied to both axes.** At
+   56°N a 30 m step in longitude covers only 16.8 m of ground, so the grid is
+   oversampled by 1/cos(lat) = 1.79×.
+
+With a 1.30 overhead factor the estimate now lands within 35% of what Earth
+Engine reports, and `gee_tile_bbox()` cuts the area until every request fits.
+Band-chunking alone could never have worked here: it only helps once a single
+band already fits, and a single band did not.
 
 Downloaded files are verified with `terra` — dimensions, CRS, and whether the
 raster came back entirely NoData, which a "successful" download can still

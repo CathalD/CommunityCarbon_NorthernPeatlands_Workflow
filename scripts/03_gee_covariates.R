@@ -486,9 +486,12 @@ if (!is.null(aoi_src)) {
 }
 
 exports <- list(
-  gee_download_image(predictors$toFloat(), "ccnp_predictors_30m", export_region,
-                     scale = CFG$gee$export_scale_m, dir_local = CFG$dir_gee,
-                     crs = CFG$gee$export_crs),
+  # Deliberately coarser than the other layers: see the note in config.R.
+  gee_download_image(predictors$toFloat(),
+                     sprintf("ccnp_predictors_%dm",
+                             CFG$gee$predictor_export_scale_m),
+                     export_region, scale = CFG$gee$predictor_export_scale_m,
+                     dir_local = CFG$dir_gee, crs = CFG$gee$export_crs),
   gee_download_image(worldcover$toInt16(), "ccnp_worldcover_30m", export_region,
                      scale = CFG$gee$export_scale_m, dir_local = CFG$dir_gee,
                      crs = CFG$gee$export_crs, bytes_per_px = 2),
