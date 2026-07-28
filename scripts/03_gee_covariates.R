@@ -230,9 +230,14 @@ build_s1 <- function(aoi) {
   med <- s1$median()
   # The VV/VH ratio separates surface-scattering wet ground from
   # volume-scattering vegetation better than either band alone.
+  # NOTE: no unmask here. The -9999 sentinel that keeps sampleRegions from
+  # dropping a core is applied ONCE, to the sampling copy of the stack only
+  # (see `stack_for_sampling` below). Applying it here would also put -9999
+  # into the EXPORTED covariate raster, where it is not a sentinel but a
+  # plausible-looking number that would silently poison any statistic computed
+  # from the GeoTIFF.
   med$addBands(med$select("VV")$subtract(med$select("VH"))$rename("VV_VH_diff"))$
     rename(c("s1_vv", "s1_vh", "s1_vv_vh_diff"))$
-    unmask(-9999, FALSE)$
     clip(aoi)
 }
 
@@ -276,10 +281,12 @@ build_s2 <- function(aoi) {
          N = m$select("B8"), S1 = m$select("B11"), S2 = m$select("B12"))
   )$rename("tc_wetness")
 
+  # As with Sentinel-1: the sampling sentinel is applied once, downstream, to
+  # the sampling copy only. Keeping the exported raster honestly masked matters
+  # more than saving one call.
   m$select(c("B2", "B3", "B4", "B8", "B11", "B12"))$
     rename(c("s2_blue", "s2_green", "s2_red", "s2_nir", "s2_swir1", "s2_swir2"))$
     addBands(ndvi)$addBands(ndwi)$addBands(ndmi)$addBands(tcw)$
-    unmask(-9999, FALSE)$
     clip(aoi)
 }
 
@@ -337,7 +344,14 @@ predictors <- terrain$
 # ring-fenced from the model. sampleRegions drops an entire point if ANY band is
 # masked there; unmasking only for sampling guarantees that all eight cores are
 # returned, while -9999 is converted back to NA before writing the CSV.
-stack <- predictors$addBands(worldcover)$addBands(alphaearth)
+#
+# GWL_FCS30 is included here as well as in the export, so the per-core wetland
+# class can be checked against the campaign labels. Campaign and landscape type
+# are perfectly confounded in this design, and an independent wetland map is the
+# only available cross-check on whether the "peat" and "mineral" labels match
+# the ground.
+stack <- predictors$addBands(worldcover)$addBands(gwl)$addBands(gwl_wetland)$
+  addBands(alphaearth)
 stack_for_sampling <- stack$unmask(-9999, FALSE)$clip(aoi)
 
 log_info("sampling ", nrow(cores), " core locations at ",
