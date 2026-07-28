@@ -76,7 +76,7 @@
 # INPUT   data/derived/01_cores_qc.csv
 # OUTPUT  data/derived/03_covariates_at_cores.csv
 #         outputs/gee/03_covariate_dictionary.csv
-#         plus GEE export tasks for the raster stack (to Google Drive)
+#         plus covariate GeoTIFFs downloaded to outputs/gee/
 # =============================================================================
 
 ## --- bootstrap ---------------------------------------------------------------
@@ -106,14 +106,14 @@ if (!requireNamespace("rgee", quietly = TRUE)) {
     "Engine. Everything upstream (01, 02) and the design-based products (05)",
     "run on base R alone and do not require this.",
     remedy = paste0(
-      'install.packages("rgee"); rgee::ee_install(); rgee::ee_Initialize(',
-      'user = "<you>", drive = TRUE)   then re-run this script.')
+      'install.packages("rgee"); rgee::ee_install(); rgee::ee_Initialize()',
+      '   then re-run this script. Google Drive is NOT required.')
   )
 }
 suppressPackageStartupMessages(library(rgee))
 
 log_info("initialising Earth Engine for project: ", CFG$gee$project)
-ee_Initialize(project = CFG$gee$project, drive = TRUE)
+ee_Initialize(project = CFG$gee$project)
 log_ok("Earth Engine initialised")
 
 cores <- require_artifact(file.path(CFG$dir_derived, "01_cores_qc.csv"),
@@ -173,7 +173,23 @@ build_terrain <- function(aoi) {
   cop    <- ee$ImageCollection(CFG$gee$asset_dem_copernicus)$
               select("DEM")$mosaic()$rename("elevation")
   # Prefer ArcticDEM, fill holes from Copernicus.
-  dem <- ee$ImageCollection(list(cop, arctic))$mosaic()$rename("elevation")
+  dem_native <- ee$ImageCollection(list(cop, arctic))$mosaic()$rename("elevation")
+
+  # PIN THE WORKING RESOLUTION BEFORE ANY FOCAL OPERATION.
+  #
+  # ArcticDEM is a 2 m product. Earth Engine runs focal operations at the
+  # image's native scale unless told otherwise, so a 2 km focal radius over a
+  # 2 m grid asks for a kernel a thousand pixels across, evaluated over the
+  # whole study area. That is what produced "Reprojection output too large
+  # (8448x8354 pixels)" on the first export attempt: the request was not
+  # merely slow, it was refused.
+  #
+  # Reprojecting to the analysis scale first makes the kernels the size they
+  # were meant to be and makes the topographic position indices mean what
+  # their names say. It also costs nothing scientifically: this landscape has
+  # metres of relief over tens of kilometres, and 2 m detail is not the signal.
+  dem <- dem_native$resample("bilinear")$
+    reproject(crs = CFG$gee$export_crs, scale = CFG$gee$export_scale_m)
 
   # Multi-scale topographic position. In a landscape this flat the SCALE at
   # which position is measured determines what it means: at 300 m it captures
@@ -447,22 +463,42 @@ write_csv_logged(dict, file.path(CFG$dir_gee, "03_covariate_dictionary.csv"),
 
 log_step("03f  RASTER EXPORT")
 
-# Everything goes to Drive AND to local disk. The local copies are what 05
-# reads to build the stratum-mean map and to derive area weights, so landing
-# them here removes a manual retrieval step.
+# Downloaded straight to local disk. No Drive, no export task, no polling.
+#
+# EXPORT REGION IS NOT THE SAMPLING REGION. The AOI above carries a
+# CFG$gee$aoi_buffer_km buffer, which exists so that compositing and point
+# sampling have margin and no core lands on an edge-masked pixel. That makes it
+# roughly five times the area actually being mapped. Downloading 30 m rasters
+# over it would put a single band past the request-size ceiling and produce
+# nothing. Exports therefore use the coast-oriented AOI from 13, which is the
+# area these products are actually for.
+dir_sp <- file.path(CFG$root, "outputs", "spatial")
+aoi_src <- tryCatch(read_aoi_ring(dir_sp), error = function(e) NULL)
+if (!is.null(aoi_src)) {
+  export_region <- ee$Geometry$Polygon(list(ring_to_ee_coords(aoi_src$ring)))
+  log_ok("exporting over the coast-oriented AOI from 13 (", aoi_src$source, ")")
+} else {
+  export_region <- ee$Geometry$Rectangle(
+    c(CFG$aoi_bbox[["xmin"]], CFG$aoi_bbox[["ymin"]],
+      CFG$aoi_bbox[["xmax"]], CFG$aoi_bbox[["ymax"]]))
+  log_warn("No oriented AOI found; exporting over the configured map box. ",
+           "Run 13_aoi_boundary.R first for the coast-following extent.")
+}
+
 exports <- list(
-  gee_export_image(predictors$toFloat(), "ccnp_predictors_30m", aoi,
-                   scale = CFG$gee$export_scale_m, crs = CFG$gee$export_crs,
-                   dir_local = CFG$dir_gee),
-  gee_export_image(worldcover$toInt16(), "ccnp_worldcover_30m", aoi,
-                   scale = CFG$gee$export_scale_m, crs = CFG$gee$export_crs,
-                   dir_local = CFG$dir_gee),
-  gee_export_image(gwl$addBands(gwl_wetland)$toInt16(), "ccnp_gwl_fcs30_30m",
-                   aoi, scale = CFG$gee$export_scale_m,
-                   crs = CFG$gee$export_crs, dir_local = CFG$dir_gee)
+  gee_download_image(predictors$toFloat(), "ccnp_predictors_30m", export_region,
+                     scale = CFG$gee$export_scale_m, dir_local = CFG$dir_gee,
+                     crs = CFG$gee$export_crs),
+  gee_download_image(worldcover$toInt16(), "ccnp_worldcover_30m", export_region,
+                     scale = CFG$gee$export_scale_m, dir_local = CFG$dir_gee,
+                     crs = CFG$gee$export_crs, bytes_per_px = 2),
+  gee_download_image(gwl$addBands(gwl_wetland)$toInt16(), "ccnp_gwl_fcs30_30m",
+                     export_region, scale = CFG$gee$export_scale_m,
+                     dir_local = CFG$dir_gee, crs = CFG$gee$export_crs,
+                     bytes_per_px = 2)
 )
 
-gee_write_manifest(exports, file.path(CFG$dir_gee, "03_export_manifest.csv"))
+gee_write_manifest(exports, file.path(CFG$dir_gee, "03_download_manifest.csv"))
 log_info("with ccnp_gwl_fcs30_30m on disk, 05_stratified_estimate.R can form ",
          "area-weighted stratum estimates and render PRODUCT 2 as a raster")
 log_ok("03 complete")

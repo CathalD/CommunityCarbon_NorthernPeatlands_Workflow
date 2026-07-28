@@ -247,7 +247,11 @@ CFG <- local({
       # hand-drawn map box.
       aoi_buffer_km    = 50,
       export_scale_m   = 30L,
-      export_crs       = "EPSG:3979"
+      # EPSG:4326 keeps every product in this workflow on one grid and avoids
+      # the server-side reprojection that a projected CRS forces on large
+      # exports. Area calculations that need equal-area are done in EPSG:3979
+      # locally, where reprojecting a finished raster is cheap.
+      export_crs       = "EPSG:4326"
     ),
 
     # ---- oriented AOI (script 13) -----------------------------------------

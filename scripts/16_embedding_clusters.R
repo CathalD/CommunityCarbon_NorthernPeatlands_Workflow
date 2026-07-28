@@ -30,7 +30,7 @@
 # REQUIRES rgee and an authenticated Earth Engine session.
 #
 # OUTPUT  outputs/tables/16_cluster_carbon.csv, 16_cluster_diagnostics.csv
-#         GEE export: cluster map over the AOI
+#         cluster GeoTIFFs downloaded to outputs/gee/ (no Google Drive)
 # =============================================================================
 
 ## --- bootstrap ---------------------------------------------------------------
@@ -57,7 +57,7 @@ if (!requireNamespace("rgee", quietly = TRUE)) {
               remedy = 'install.packages("rgee"); rgee::ee_install(); re-run.')
 }
 suppressPackageStartupMessages(library(rgee))
-ee_Initialize(project = CFG$gee$project, drive = TRUE)
+ee_Initialize(project = CFG$gee$project)
 log_ok("Earth Engine initialised")
 
 cores  <- require_artifact(file.path(CFG$dir_derived, "01_cores_qc.csv"),
@@ -242,10 +242,7 @@ pts <- ee$FeatureCollection(lapply(seq_len(nrow(cores)), function(i) {
   ee$Feature(ee$Geometry$Point(c(cores$longitude[i], cores$latitude[i])),
              list(core_id = cores$core_id[i], campaign = cores$campaign[i]))
 }))
-cs <- sf::st_drop_geometry(ee_as_sf(
-  clusters$sampleRegions(collection = pts, scale = CFG$gee$export_scale_m,
-                         geometries = FALSE, tileScale = 4),
-  maxFeatures = 1000))
+cs <- gee_sample_points(clusters, pts, scale = CFG$gee$export_scale_m)
 r30 <- stocks[stocks$scenario == "as_supplied" &
               stocks$window == "reference_0_30", ]
 cs$stock_0_30_kgm2 <- r30$stock_kgm2[match(cs$core_id, r30$core_id)]
@@ -277,9 +274,9 @@ write_csv_logged(cs, file.path(CFG$dir_tables, "16_cores_by_cluster.csv"),
                  "which landscape cluster each core sits in")
 
 exports <- list(
-  gee_export_image(clusters$toInt16(), "ccnp_landscape_clusters_30m", aoi,
-                   scale = CFG$gee$export_scale_m, crs = CFG$gee$export_crs,
-                   dir_local = CFG$dir_gee)
+  gee_download_image(clusters$toInt16(), "ccnp_landscape_clusters_30m", aoi,
+                     scale = CFG$gee$export_scale_m, dir_local = CFG$dir_gee,
+                     crs = CFG$gee$export_crs, bytes_per_px = 2)
 )
 
 # Carbon painted by cluster, so the clustering can be seen as a carbon map
@@ -290,10 +287,10 @@ if (nrow(sg_ct)) {
   clus_mean <- clusters$remap(as.integer(sg_ct$cluster),
                               as.numeric(sg_ct$mean_kgm2))$
     rename("cluster_mean_soc_0_30_kgm2")$toFloat()
-  exports[[length(exports) + 1L]] <- gee_export_image(
+  exports[[length(exports) + 1L]] <- gee_download_image(
     clus_mean, "ccnp_cluster_mean_soc_0_30_kgm2", aoi,
-    scale = CFG$gee$export_scale_m, crs = CFG$gee$export_crs,
-    dir_local = CFG$dir_gee)
+    scale = CFG$gee$export_scale_m, dir_local = CFG$dir_gee,
+    crs = CFG$gee$export_crs)
 
   # A clusters-without-ground-truth mask: where the next cores should go.
   unvisited <- sg_ct$cluster[!sg_ct$cluster %in% covered]
@@ -301,16 +298,16 @@ if (nrow(sg_ct)) {
     gap <- clusters$remap(as.integer(unvisited),
                           rep(1L, length(unvisited)), 0L)$
       rename("cluster_without_any_core")$toInt16()
-    exports[[length(exports) + 1L]] <- gee_export_image(
+    exports[[length(exports) + 1L]] <- gee_download_image(
       gap, "ccnp_clusters_without_cores", aoi,
-      scale = CFG$gee$export_scale_m, crs = CFG$gee$export_crs,
-      dir_local = CFG$dir_gee)
+      scale = CFG$gee$export_scale_m, dir_local = CFG$dir_gee,
+      crs = CFG$gee$export_crs, bytes_per_px = 2)
     log_ok("exported a sampling-gap layer: 1 where no core has ever been ",
            "taken in that landscape type")
   }
 }
 
-gee_write_manifest(exports, file.path(CFG$dir_gee, "16_export_manifest.csv"))
+gee_write_manifest(exports, file.path(CFG$dir_gee, "16_download_manifest.csv"))
 log_info("Suggested next-core targets: the unvisited clusters listed above, ",
          "chosen to cover landscape types rather than to fill space evenly.")
 log_ok("16 complete")

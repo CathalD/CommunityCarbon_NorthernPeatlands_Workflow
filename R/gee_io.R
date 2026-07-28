@@ -1,142 +1,166 @@
 # =============================================================================
-# R/gee_io.R  --  Getting Earth Engine results out of Earth Engine.
+# R/gee_io.R  --  Getting Earth Engine rasters onto local disk.
 #
-# Every raster this workflow builds in Earth Engine is wanted in two places:
+# LOCAL ONLY. There is no Drive export here and no Drive authentication.
+# Rasters are fetched straight from Earth Engine over HTTPS with
+# ee$Image$getDownloadURL() and written into outputs/gee/.
 #
-#   GOOGLE DRIVE  so it can be shared, opened in Earth Engine again, or handed
-#                 to someone without an R session.
-#   LOCAL DISK    so the reports can embed it, `terra` can read it, and the
-#                 downstream scripts that expect a real prior raster -- notably
-#                 11_bayesian_map.R -- can find one.
+# Why this rather than an export task: a Drive export means starting a task,
+# polling it for minutes, then a second authenticated hop to pull the file
+# back. Every one of those steps can fail on its own, and the failure that bit
+# this project was in the last of them. A signed download URL is one request,
+# needs no Drive scope, and either produces the file or says why not.
 #
-# The second is the one that changes the analysis. 11 falls back to a spatially
-# constant regional prior and marks its outputs DEMO_ when no reference raster
-# is on disk. Land the GeoTIFFs in outputs/gee/ under the names 11 looks for
-# and it silently upgrades to the real published surfaces.
+# THE ONE CONSTRAINT: getDownloadURL has a hard request-size limit (~48 MB).
+# A single Float32 band at 30 m over this study area is about 12 MB, so single
+# layers are comfortable, but a nineteen-band predictor stack is not. The
+# downloader therefore estimates the size up front and splits the request into
+# band groups that fit, rather than discovering the limit as an opaque server
+# error partway through.
 #
-# DESIGN NOTE: a failed download must never lose work. The Drive export is
-# started first and is allowed to succeed on its own; downloading is a separate,
-# recoverable step. If the download fails the task id and filename are reported
-# so the file can be fetched by hand, and the script carries on.
-#
-# These functions require rgee, and terra only for the optional verification
-# step. Nothing else in the workflow depends on either.
+# The local copy is what the reports embed, what terra reads, and what
+# 11_bayesian_map.R needs in order to drop its DEMO_ fallback and use the real
+# published priors.
 # =============================================================================
 
 #' Is a package available? Small wrapper so callers read cleanly.
 has_pkg <- function(p) requireNamespace(p, quietly = TRUE)
 
-#' Export an Earth Engine image to Drive and, optionally, download it locally.
+# Earth Engine rejects a getDownloadURL request above roughly 48 MB. Aim well
+# under it: the estimate below is approximate, and a failed request costs a
+# round trip.
+.GEE_MAX_BYTES <- 32 * 1024^2
+
+#' Estimate the download size of an image over a region. Pure arithmetic.
 #'
-#' @param image      ee$Image to export.
-#' @param name       export description AND the local file stem. Keep it stable:
-#'                   downstream scripts match on these names.
-#' @param region     ee$Geometry to clip to.
-#' @param scale      metres per pixel.
-#' @param crs        output CRS, e.g. "EPSG:4326".
-#' @param folder     Drive folder.
-#' @param dir_local  local directory; NULL to skip the download.
-#' @param wait       block until the export finishes (needed to download).
-#' @param max_minutes give up waiting after this long. The Drive export keeps
-#'                   running regardless; only the local copy is abandoned.
+#' @param area_km2 area of the export region.
+#' @param scale_m  metres per pixel.
+#' @param n_bands  number of bands.
+#' @param bytes_per_px bytes per band per pixel (4 for Float32/Int32).
+gee_estimate_bytes <- function(area_km2, scale_m, n_bands, bytes_per_px = 4) {
+  n_px <- (area_km2 * 1e6) / (scale_m^2)
+  n_px * n_bands * bytes_per_px
+}
+
+#' Split band names into groups small enough to download in one request. Pure.
+gee_band_chunks <- function(bands, area_km2, scale_m, max_bytes = .GEE_MAX_BYTES,
+                            bytes_per_px = 4) {
+  per_band <- gee_estimate_bytes(area_km2, scale_m, 1, bytes_per_px)
+  if (per_band >= max_bytes) return(NULL)     # even one band is too large
+  per_chunk <- max(1L, floor(max_bytes / per_band))
+  split(bands, ceiling(seq_along(bands) / per_chunk))
+}
+
+#' Download an Earth Engine image to a local GeoTIFF. No Drive involved.
 #'
-#' @return a one-row data frame recording what happened, for the manifest.
-gee_export_image <- function(image, name, region, scale, crs,
-                             folder = "CCNP_SOC", dir_local = NULL,
-                             wait = TRUE, max_minutes = 30,
-                             overwrite = TRUE) {
-  if (!has_pkg("rgee")) stop("rgee is required for gee_export_image()", call. = FALSE)
+#' @param image     ee$Image.
+#' @param name      file stem. Downstream scripts match on these names, so keep
+#'                  them stable.
+#' @param region    ee$Geometry to clip to.
+#' @param scale     metres per pixel.
+#' @param crs       output CRS. EPSG:4326 keeps these stackable with every
+#'                  other product this workflow writes and avoids the
+#'                  reprojection that a projected CRS forces on the server.
+#' @param dir_local destination directory.
+#' @param overwrite re-download a file that already exists.
+#'
+#' @return a one-row data frame for the manifest.
+gee_download_image <- function(image, name, region, scale, dir_local,
+                               crs = "EPSG:4326", overwrite = FALSE,
+                               bytes_per_px = 4) {
+  if (!has_pkg("rgee")) stop("rgee is required for gee_download_image()", call. = FALSE)
+  if (!dir.exists(dir_local)) dir.create(dir_local, recursive = TRUE,
+                                         showWarnings = FALSE)
+  dest <- file.path(dir_local, paste0(name, ".tif"))
 
-  local_path <- if (is.null(dir_local)) NA_character_ else
-    file.path(dir_local, paste0(name, ".tif"))
-
-  if (!is.null(dir_local) && !dir.exists(dir_local)) {
-    dir.create(dir_local, recursive = TRUE, showWarnings = FALSE)
-  }
-
-  # Skip work that has already been done, unless told otherwise.
-  if (!overwrite && !is.na(local_path) && file.exists(local_path)) {
-    log_ok("already present locally, skipping export: ", basename(local_path))
-    return(data.frame(name = name, drive_folder = folder,
-                      local_path = local_path, status = "cached",
-                      note = "local file already existed",
+  if (!overwrite && file.exists(dest)) {
+    log_ok("already on disk, skipping: ", basename(dest))
+    return(data.frame(name = name, local_path = dest, status = "cached",
+                      n_files = 1L, note = gee_verify_local(dest),
                       stringsAsFactors = FALSE))
   }
 
-  log_info("exporting ", name, " at ", scale, " m to Drive/", folder)
-  task <- rgee::ee_image_to_drive(
-    image = image, description = name, folder = folder, region = region,
-    scale = scale, crs = crs, maxPixels = 1e13, fileFormat = "GeoTIFF")
-  task$start()
+  bands <- tryCatch(image$bandNames()$getInfo(),
+                    error = function(e) NULL)
+  if (is.null(bands)) {
+    log_warn("could not read band names for ", name, "; skipping")
+    return(data.frame(name = name, local_path = NA_character_,
+                      status = "failed", n_files = 0L,
+                      note = "band names unavailable", stringsAsFactors = FALSE))
+  }
+  area_km2 <- tryCatch(region$area(maxError = 100)$getInfo() / 1e6,
+                       error = function(e) NA_real_)
+  if (!is.finite(area_km2)) area_km2 <- 3000   # conservative fallback
 
-  if (!wait) {
-    log_ok("started (not waiting): ", name)
-    return(data.frame(name = name, drive_folder = folder,
-                      local_path = NA_character_, status = "started",
-                      note = "wait = FALSE; download separately",
+  est <- gee_estimate_bytes(area_km2, scale, length(bands), bytes_per_px)
+  log_info(sprintf("%s: %d band(s), %.0f km2 at %g m, estimated %.1f MB",
+                   name, length(bands), area_km2, scale, est / 1024^2))
+
+  chunks <- gee_band_chunks(bands, area_km2, scale, bytes_per_px = bytes_per_px)
+  if (is.null(chunks)) {
+    log_warn(strrep("-", 68))
+    log_warn("A SINGLE BAND of ", name, " exceeds the download limit at ",
+             scale, " m.")
+    log_warn(sprintf("  One band is about %.0f MB; the ceiling is %.0f MB.",
+                     gee_estimate_bytes(area_km2, scale, 1, bytes_per_px) / 1024^2,
+                     .GEE_MAX_BYTES / 1024^2))
+    log_warn("  Coarsen the scale, or shrink the area, and re-run. Nothing is")
+    log_warn("  written rather than a partial file that looks complete.")
+    log_warn(strrep("-", 68))
+    return(data.frame(name = name, local_path = NA_character_,
+                      status = "too_large", n_files = 0L,
+                      note = sprintf("one band ~%.0f MB at %g m",
+                                     gee_estimate_bytes(area_km2, scale, 1,
+                                                        bytes_per_px) / 1024^2,
+                                     scale),
                       stringsAsFactors = FALSE))
   }
-
-  log_info("waiting for Earth Engine to finish ", name,
-           " (up to ", max_minutes, " min)")
-  waited <- tryCatch({
-    rgee::ee_monitoring(task, task_time = 10,
-                        max_attempts = ceiling(max_minutes * 6))
-    TRUE
-  }, error = function(e) {
-    log_warn("monitoring stopped for ", name, ": ", conditionMessage(e))
-    FALSE
-  })
-
-  if (!waited) {
-    log_warn("The Drive export for ", name, " may still be running. Check ",
-             "rgee::ee_monitoring() and fetch it by hand if needed.")
-    return(data.frame(name = name, drive_folder = folder,
-                      local_path = NA_character_, status = "drive_pending",
-                      note = "export started; wait timed out or errored",
-                      stringsAsFactors = FALSE))
+  if (length(chunks) > 1L) {
+    log_info("splitting into ", length(chunks),
+             " band group(s) to stay under the request-size limit")
   }
 
-  if (is.null(dir_local)) {
-    log_ok("exported to Drive: ", name)
-    return(data.frame(name = name, drive_folder = folder,
-                      local_path = NA_character_, status = "drive_only",
-                      note = "no local directory requested",
-                      stringsAsFactors = FALSE))
+  paths <- character(0)
+  for (i in seq_along(chunks)) {
+    bn <- chunks[[i]]
+    stem <- if (length(chunks) == 1L) name else sprintf("%s_part%02d", name, i)
+    out  <- file.path(dir_local, paste0(stem, ".tif"))
+    url <- tryCatch(
+      image$select(bn)$getDownloadURL(list(
+        name = stem, region = region, scale = scale, crs = crs,
+        filePerBand = FALSE, format = "GEO_TIFF")),
+      error = function(e) { log_warn("URL request failed for ", stem, ": ",
+                                     conditionMessage(e)); NULL })
+    if (is.null(url)) next
+
+    ok_dl <- tryCatch({
+      utils::download.file(url, destfile = out, mode = "wb", quiet = TRUE)
+      TRUE
+    }, error = function(e) { log_warn("download failed for ", stem, ": ",
+                                      conditionMessage(e)); FALSE })
+    if (!ok_dl || !file.exists(out) || file.size(out) < 1024) {
+      log_warn("no usable file produced for ", stem)
+      if (file.exists(out)) unlink(out)
+      next
+    }
+    log_ok(sprintf("wrote %s (%.1f MB)", basename(out), file.size(out) / 1024^2))
+    paths <- c(paths, out)
   }
 
-  # The Drive copy exists at this point. Downloading is separately recoverable.
-  got <- tryCatch(
-    rgee::ee_drive_to_local(task = task, dsn = local_path,
-                            overwrite = TRUE, consider = FALSE),
-    error = function(e) { log_warn("download failed for ", name, ": ",
-                                   conditionMessage(e)); NULL })
-
-  if (is.null(got) || !length(got)) {
-    log_warn("Drive copy of ", name, " is fine; the LOCAL copy failed. ",
-             "Download it from Drive/", folder, " into ", dir_local,
-             " and re-run the downstream script.")
-    return(data.frame(name = name, drive_folder = folder,
-                      local_path = NA_character_, status = "drive_only",
-                      note = "export succeeded; local download failed",
-                      stringsAsFactors = FALSE))
+  if (!length(paths)) {
+    return(data.frame(name = name, local_path = NA_character_,
+                      status = "failed", n_files = 0L,
+                      note = "no file downloaded", stringsAsFactors = FALSE))
+  }
+  if (length(paths) > 1L) {
+    log_warn(name, " arrived as ", length(paths), " band-group files. Stack ",
+             "them with terra::rast(c(...)) before use.")
   }
 
-  # Earth Engine splits large exports across several files. Record that rather
-  # than silently using only the first.
-  n_files <- length(got)
-  if (n_files > 1L) {
-    log_warn(name, " came back as ", n_files, " tiles. `terra` can mosaic ",
-             "them with terra::merge(); downstream scripts expecting a single ",
-             "file will need that step first.")
-  }
-  log_ok("wrote ", basename(got[[1]]),
-         if (n_files > 1L) paste0(" (+", n_files - 1L, " more tiles)") else "")
-
-  info <- gee_verify_local(got[[1]])
-  data.frame(name = name, drive_folder = folder,
-             local_path = got[[1]], status = "drive_and_local",
-             note = info, stringsAsFactors = FALSE)
+  data.frame(name = name, local_path = paths[[1]],
+             status = if (length(paths) > 1L) "local_multipart" else "local",
+             n_files = length(paths), note = gee_verify_local(paths[[1]]),
+             stringsAsFactors = FALSE)
 }
 
 #' Read a downloaded GeoTIFF's basic properties, to confirm it is usable.
@@ -149,59 +173,53 @@ gee_verify_local <- function(path) {
   if (is.null(r)) return("UNREADABLE by terra")
   v <- tryCatch(terra::global(r[[1]], "mean", na.rm = TRUE)[[1]],
                 error = function(e) NA_real_)
-  nlyr <- terra::nlyr(r)
   msg <- sprintf("%d x %d x %d layer(s), %s, mean %.4g",
-                 terra::nrow(r), terra::ncol(r), nlyr,
+                 terra::nrow(r), terra::ncol(r), terra::nlyr(r),
                  terra::crs(r, describe = TRUE)$code, v)
   if (!is.finite(v)) {
-    log_warn(basename(path), " reads as entirely NoData. The export region ",
-             "may not overlap the asset, or the asset may be masked there.")
+    log_warn(basename(path), " reads as entirely NoData. The region may not ",
+             "overlap the asset, or the asset may be masked there.")
     msg <- paste0(msg, " -- ALL NoData")
   }
   msg
 }
 
-#' Export an Earth Engine FeatureCollection to Drive and read it locally.
+#' Sample an Earth Engine image at points and return a plain data frame.
 #'
-#' Used for point extractions, which are small enough that the direct route is
-#' reliable; Drive is used only so the same artefact is shareable.
-gee_export_table <- function(fc, name, dir_local, folder = "CCNP_SOC",
-                             max_features = 10000) {
+#' sampleRegions DROPS a feature entirely when ANY band is masked there, which
+#' silently loses cores rather than returning NA for the missing band. The
+#' sentinel below keeps every point and is converted back to NA afterwards, so
+#' a masked layer costs one value instead of one core.
+gee_sample_points <- function(image, points, scale, sentinel = -9999,
+                              max_features = 10000) {
   if (!has_pkg("rgee")) stop("rgee is required", call. = FALSE)
-  if (!dir.exists(dir_local)) dir.create(dir_local, recursive = TRUE,
-                                         showWarnings = FALSE)
-  task <- rgee::ee_table_to_drive(collection = fc, description = name,
-                                  folder = folder, fileFormat = "CSV")
-  task$start()
-  log_ok("started table export to Drive: ", name)
-
-  local <- tryCatch({
-    df <- rgee::ee_as_sf(fc, maxFeatures = max_features)
-    if (has_pkg("sf")) df <- sf::st_drop_geometry(df)
-    p <- file.path(dir_local, paste0(name, ".csv"))
-    utils::write.csv(df, p, row.names = FALSE)
-    log_ok("wrote ", basename(p), " (", nrow(df), " rows)")
-    p
-  }, error = function(e) {
-    log_warn("local table read failed for ", name, ": ", conditionMessage(e))
-    NA_character_
+  samp <- image$unmask(sentinel, FALSE)$sampleRegions(
+    collection = points, scale = scale, geometries = FALSE, tileScale = 4)
+  df <- rgee::ee_as_sf(samp, maxFeatures = max_features)
+  if (has_pkg("sf")) df <- sf::st_drop_geometry(df)
+  num <- vapply(df, is.numeric, logical(1))
+  df[num] <- lapply(df[num], function(x) {
+    x[is.finite(x) & abs(x - sentinel) < 1e-6] <- NA_real_
+    x
   })
-  data.frame(name = name, drive_folder = folder, local_path = local,
-             status = if (is.na(local)) "drive_only" else "drive_and_local",
-             note = "feature collection", stringsAsFactors = FALSE)
+  df
 }
 
-#' Write the export manifest, and say plainly what it unlocks.
+#' Write the download manifest and summarise what landed.
 gee_write_manifest <- function(rows, path) {
+  rows <- Filter(Negate(is.null), rows)
   if (!length(rows)) return(invisible(NULL))
-  m <- do.call(rbind, Filter(Negate(is.null), rows))
-  write_csv_logged(m, path, "what was exported, and where it landed")
+  m <- do.call(rbind, rows)
+  write_csv_logged(m, path, "what was downloaded, and where it landed")
 
-  ok_local <- sum(m$status %in% c("drive_and_local", "cached"))
-  log_info(ok_local, " of ", nrow(m), " products are now on local disk")
-  if (ok_local < nrow(m)) {
-    log_warn(nrow(m) - ok_local, " product(s) reached Drive but not local disk. ",
-             "They are listed with status 'drive_only' or 'drive_pending'.")
+  ok_local <- sum(m$status %in% c("local", "local_multipart", "cached"))
+  log_info(ok_local, " of ", nrow(m), " products are on local disk")
+  bad <- m[!m$status %in% c("local", "local_multipart", "cached"), ]
+  if (nrow(bad)) {
+    log_warn(nrow(bad), " product(s) did not download:")
+    for (i in seq_len(nrow(bad))) {
+      log_warn("   ", bad$name[i], " -- ", bad$status[i], ": ", bad$note[i])
+    }
   }
   invisible(m)
 }

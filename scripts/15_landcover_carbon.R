@@ -29,7 +29,7 @@
 #
 # OUTPUT  outputs/tables/15_carbon_by_landcover.csv
 #         outputs/tables/15_cores_by_landcover.csv
-#         GEE exports: ecosystem carbon raster + class map over the AOI
+#         GeoTIFFs downloaded to outputs/gee/ (no Google Drive involved)
 # =============================================================================
 
 ## --- bootstrap ---------------------------------------------------------------
@@ -55,7 +55,7 @@ if (!requireNamespace("rgee", quietly = TRUE)) {
     remedy = 'install.packages("rgee"); rgee::ee_install(); then re-run.')
 }
 suppressPackageStartupMessages(library(rgee))
-ee_Initialize(project = CFG$gee$project, drive = TRUE)
+ee_Initialize(project = CFG$gee$project)
 log_ok("Earth Engine initialised")
 
 cores <- require_artifact(file.path(CFG$dir_derived, "01_cores_qc.csv"),
@@ -228,9 +228,7 @@ print_table(zt[zt$landcover_source == "GWL_FCS30" &
 
 log_step("15e  GROUND VERIFICATION BY ECOSYSTEM")
 
-samp <- gwl$addBands(wc)$sampleRegions(collection = pts, scale = 30,
-                                       geometries = FALSE, tileScale = 4)
-cl <- sf::st_drop_geometry(ee_as_sf(samp, maxFeatures = 1000))
+cl <- gee_sample_points(gwl$addBands(wc), pts, scale = 30)
 cl$gwl_label <- gwl_labels$label[match(cl$gwl_class, gwl_labels$class)]
 cl$wc_label  <- wc_labels$label[match(cl$worldcover, wc_labels$class)]
 
@@ -281,19 +279,18 @@ write_csv_logged(gwl_area[, c("label", "area_km2", "pct_of_aoi", "mean_kgm2",
                  file.path(CFG$dir_tables, "15_ecosystem_verification.csv"),
                  "which ecosystems have any ground truth at all")
 
-# Each product goes to Drive AND to local disk. The local copy is what the
-# reports embed and what `terra` can open; the Drive copy is what gets shared.
+# Downloaded straight to local disk. No Drive involved.
 exports <- list(
-  gee_export_image(gwl$addBands(wc)$toInt16(), "ccnp_ecosystem_classes_30m",
-                   aoi, scale = CFG$gee$export_scale_m,
-                   crs = CFG$gee$export_crs, dir_local = CFG$dir_gee),
-  gee_export_image(sg_0_30$toFloat(), "ccnp_soilgrids_ocs_0_30_30m",
-                   aoi, scale = 250, crs = CFG$gee$export_crs,
-                   dir_local = CFG$dir_gee, overwrite = FALSE),
-  gee_export_image(li$toFloat(), "ccnp_li2025_peat_carbon_30m",
-                   aoi, scale = CFG$gee$export_scale_m,
-                   crs = CFG$gee$export_crs, dir_local = CFG$dir_gee,
-                   overwrite = FALSE)
+  gee_download_image(gwl$addBands(wc)$toInt16(), "ccnp_ecosystem_classes_30m",
+                     aoi, scale = CFG$gee$export_scale_m,
+                     dir_local = CFG$dir_gee, crs = CFG$gee$export_crs,
+                     bytes_per_px = 2),
+  gee_download_image(sg_0_30$toFloat(), "ccnp_soilgrids_ocs_0_30_30m",
+                     aoi, scale = 250, dir_local = CFG$dir_gee,
+                     crs = CFG$gee$export_crs),
+  gee_download_image(li$toFloat(), "ccnp_li2025_peat_carbon_30m",
+                     aoi, scale = CFG$gee$export_scale_m,
+                     dir_local = CFG$dir_gee, crs = CFG$gee$export_crs)
 )
 
 # A carbon-per-ecosystem raster: every pixel painted with its own class's mean.
@@ -304,16 +301,16 @@ if (nrow(gwl_tbl)) {
   eco_mean <- gwl$remap(as.integer(gwl_tbl$class),
                         as.numeric(gwl_tbl$mean_kgm2))$
     rename("ecosystem_mean_soc_0_30_kgm2")$toFloat()
-  exports[[length(exports) + 1L]] <- gee_export_image(
+  exports[[length(exports) + 1L]] <- gee_download_image(
     eco_mean, "ccnp_ecosystem_mean_soc_0_30_kgm2", aoi,
-    scale = CFG$gee$export_scale_m, crs = CFG$gee$export_crs,
-    dir_local = CFG$dir_gee)
+    scale = CFG$gee$export_scale_m, dir_local = CFG$dir_gee,
+    crs = CFG$gee$export_crs)
   log_warn("ccnp_ecosystem_mean_soc_0_30_kgm2 is a CLASS-MEAN ASSIGNMENT: ",
            "every pixel carries its ecosystem's average, not its own value. ",
            "Within-class variation is discarded by construction.")
 }
 
-gee_write_manifest(exports, file.path(CFG$dir_gee, "15_export_manifest.csv"))
+gee_write_manifest(exports, file.path(CFG$dir_gee, "15_download_manifest.csv"))
 log_info("local GeoTIFFs are in ", CFG$dir_gee,
          "; re-run 11 to build the Bayesian products on the real priors")
 log_ok("15 complete")
