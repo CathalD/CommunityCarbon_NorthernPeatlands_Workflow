@@ -28,8 +28,8 @@ Community-facing summary and shareable figures: **[`outputs/COMMUNITY_BRIEF.md`]
 ```bash
 Rscript run_all.R               # 01,02,05,09,13,14 → 07,08,10,11,12 — base R
 Rscript run_all.R --gee         # adds 03, 04, 06     — needs rgee + EE auth
-Rscript tests/test_functions.R  # 182 unit tests
-Rscript tests/test_pipeline.R   # 108 integration tests
+Rscript tests/test_functions.R  # 193 unit tests
+Rscript tests/test_pipeline.R   # 131 integration tests
 ```
 
 **Scripts 01, 02, 05 and 07–12 require no R packages at all** — not even
@@ -88,6 +88,26 @@ depth, so *less* than proportional is exactly what physics predicts — and thes
 cores show bulk density rising 4.6× from surface to 30 cm. **The community
 measurement independently corroborates the published regional map at this
 site.**
+
+## Earth Engine outputs go to Drive *and* local disk
+
+`R/gee_io.R` exports every Earth Engine raster to Google Drive and downloads it
+to `outputs/gee/`. The Drive copy is for sharing; the local copy is what the
+reports embed, what `terra` can read, and — the part that changes the analysis
+— what `11_bayesian_map.R` looks for.
+
+**Running `04` upgrades the Bayesian maps automatically.** With no reference
+raster on disk, `11` falls back to a spatially constant regional prior and
+prefixes its outputs `DEMO_`. The downloads land under exactly the filenames
+`11` expects, so re-running it afterwards produces the real Li-prior product
+with no further action.
+
+A failed download never loses work: the Drive export is started first and
+succeeds on its own, downloading is a separate recoverable step, and each
+product's fate is recorded in an export manifest (`drive_and_local`,
+`drive_only`, `drive_pending`, `cached`). Downloaded files are verified with
+`terra` — dimensions, CRS, and whether the raster is entirely NoData, which a
+successful download can still leave you with.
 
 ## Coast-following AOI (script 13)
 
@@ -154,6 +174,7 @@ R/
   qc.R                        hard gates and value flags (pure predicates)
   depth.R                     depth semantics and window integration (pure)
   stats.R                     bootstrap, cross-validation, variogram diagnostic (pure)
+  gee_io.R                    Earth Engine export to Drive AND local disk
   bayes.R                     conjugate Bayesian update, kernels, depth splitting (pure)
   geotiff.R                   base-R GeoTIFF and GeoJSON writers (no GDAL)
 scripts/
