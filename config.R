@@ -247,6 +247,12 @@ CFG <- local({
       # hand-drawn map box.
       aoi_buffer_km    = 50,
       export_scale_m   = 30L,
+      # The 19-band predictor stack is the one export where 30 m is a poor
+      # trade: over the AOI envelope it is ~1.2 GB and 64 separate requests,
+      # and nothing downstream consumes it while 06 declines to map. 100 m
+      # keeps it inspectable at a fraction of the cost. Set to
+      # CFG$gee$export_scale_m if you want the full-resolution stack.
+      predictor_export_scale_m = 100L,
       # EPSG:4326 keeps every product in this workflow on one grid and avoids
       # the server-side reprojection that a projected CRS forces on large
       # exports. Area calculations that need equal-area are done in EPSG:3979

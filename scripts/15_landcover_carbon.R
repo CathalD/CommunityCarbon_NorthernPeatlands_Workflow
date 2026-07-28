@@ -216,6 +216,36 @@ if (!length(tabs)) {
 zt <- do.call(rbind, tabs)
 rownames(zt) <- NULL
 
+# --- are the class codes the ones the product documents? ---------------------
+# GWL_FCS30 documents classes 180-188. Anything outside that range means the
+# mosaic is not returning what the label table describes, and every class mean
+# attached to such a code is uninterpretable however plausible it looks.
+gwl_z <- zt[zt$landcover_source == "GWL_FCS30" & zt$depth_support == "0-30 cm", ]
+if (nrow(gwl_z)) {
+  undoc <- !gwl_z$class %in% gwl_labels$class
+  pct_undoc <- sum(gwl_z$pct_of_aoi[undoc], na.rm = TRUE)
+  if (pct_undoc > 1) {
+    log_warn(strrep("-", 68))
+    log_warn("GWL_FCS30 IS RETURNING UNDOCUMENTED CLASS CODES.")
+    log_warn(sprintf("  %d of %d classes are outside the documented 180-188 range,",
+                     sum(undoc), nrow(gwl_z)))
+    log_warn(sprintf("  covering %.1f%% of the AOI.", pct_undoc))
+    log_warn(paste0("  codes seen: ",
+                    paste(head(sort(gwl_z$class[undoc]), 12), collapse = ", "),
+                    if (sum(undoc) > 12) " ..." else ""))
+    log_warn("")
+    log_warn("  This collection is tiled, and mosaicking tiles whose band order")
+    log_warn("  or encoding differs will produce exactly this. The class means")
+    log_warn("  attached to those codes are NOT interpretable as ecosystems,")
+    log_warn("  however reasonable the carbon values look.")
+    log_warn("  Treat the GWL ecosystem breakdown as PROVISIONAL until the")
+    log_warn("  codes are reconciled against the product documentation.")
+    log_warn(strrep("-", 68))
+  } else {
+    log_ok("all GWL_FCS30 class codes fall in the documented 180-188 range")
+  }
+}
+
 log_info("carbon by ecosystem (GWL_FCS30, 0-30 cm):")
 print_table(zt[zt$landcover_source == "GWL_FCS30" &
                zt$depth_support == "0-30 cm",
@@ -297,6 +327,19 @@ exports <- list(
 # This is the layer people actually want to look at, and it is a CLASS-MEAN
 # ASSIGNMENT in exactly the sense 05 defines -- not a per-pixel estimate.
 gwl_tbl <- zt[zt$landcover_source == "GWL_FCS30" & zt$depth_support == "0-30 cm", ]
+
+# A class with too few pixels to yield a mean cannot be remapped: passing NA to
+# remap() poisons the whole call and the image comes back with no band names at
+# all. Drop those classes; the pixels become NoData, which is the correct
+# statement about a class with no usable estimate.
+n_before <- nrow(gwl_tbl)
+gwl_tbl <- gwl_tbl[is.finite(gwl_tbl$mean_kgm2) & is.finite(gwl_tbl$class), ]
+if (nrow(gwl_tbl) < n_before) {
+  log_info("dropped ", n_before - nrow(gwl_tbl),
+           " class(es) with no computable mean from the ecosystem raster; ",
+           "those pixels become NoData")
+}
+
 if (nrow(gwl_tbl)) {
   eco_mean <- gwl$remap(as.integer(gwl_tbl$class),
                         as.numeric(gwl_tbl$mean_kgm2))$
