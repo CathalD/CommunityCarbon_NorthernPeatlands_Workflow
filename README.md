@@ -18,13 +18,13 @@ Community-facing summary and shareable figures: **[`outputs/COMMUNITY_BRIEF.md`]
 ## Quick start
 
 ```bash
-Rscript run_all.R               # 01, 02, 05, 07, 08, 09 — base R only
+Rscript run_all.R               # 01, 02, 05, 09, 07, 08, 10 — base R only
 Rscript run_all.R --gee         # adds 03, 04, 06     — needs rgee + EE auth
-Rscript tests/test_functions.R  # 73 unit tests
-Rscript tests/test_pipeline.R   # 45 integration tests
+Rscript tests/test_functions.R  # 109 unit tests
+Rscript tests/test_pipeline.R   # 63 integration tests
 ```
 
-**Scripts 01, 02, 05, 07, 08 and 09 require no R packages at all** — not even
+**Scripts 01, 02, 05, 07, 08, 09 and 10 require no R packages at all** — not even
 for spatial output. That is deliberate: the scientifically load-bearing steps —
 quality control, stock computation, stratified estimation, the validation
 ledger, and the GeoTIFFs — should run on any R installation without a
@@ -76,7 +76,7 @@ scripts/
   06_covariate_model.R        PRODUCT 3 + honest cross-validation        [needs GEE]
   07_validation_ledger.R      what is validated, what is not, where leakage was possible
   08_report.R                 assembles outputs/REPORT.md
-  09_community_figures.R      creates shareable PNG figures + COMMUNITY_BRIEF.md
+  10_community_figures.R      creates shareable PNG figures + COMMUNITY_BRIEF.md
 tests/                        unit + integration tests
 data/raw/                     the 22-row core CSV, verbatim headers
 data/derived/                 script outputs
@@ -214,7 +214,7 @@ alike — precisely the distinction these two campaigns represent.
 
 ## Community figure pack
 
-The simplified communication workflow now ends with `09_community_figures.R`,
+The simplified communication workflow now ends with `10_community_figures.R`,
 which produces a plain-language brief and four PNGs for meetings, slides and
 printouts:
 
