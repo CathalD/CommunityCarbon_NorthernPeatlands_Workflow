@@ -73,23 +73,31 @@ if (any(cores$longitude > 0)) {
 
 log_step("15a  AOI")
 
-aoi_json <- file.path(CFG$root, "outputs", "spatial", "aoi_coast_oriented.geojson")
-if (file.exists(aoi_json)) {
-  txt <- paste(readLines(aoi_json, warn = FALSE), collapse = " ")
-  nums <- as.numeric(regmatches(txt,
-            gregexpr("-?[0-9]+\\.[0-9]+", txt))[[1]])
-  # The first ring is the polygon; pairs are (lon, lat).
-  n_pair <- length(nums) %/% 2
-  ring <- lapply(seq_len(n_pair), function(i) c(nums[2 * i - 1], nums[2 * i]))
-  ring <- Filter(function(p) p[1] < 0 && p[2] > 0 && p[2] < 90, ring)
-  aoi <- ee$Geometry$Polygon(list(ring))
-  log_ok("using the coast-oriented AOI from 13 (", length(ring), " vertices)")
+dir_sp <- file.path(CFG$root, "outputs", "spatial")
+aoi_src <- tryCatch(read_aoi_ring(dir_sp), error = function(e) NULL)
+
+if (!is.null(aoi_src)) {
+  ring <- aoi_src$ring
+  aoi  <- ee$Geometry$Polygon(list(ring_to_ee_coords(ring)))
+  log_ok("using the coast-oriented AOI from 13 (", nrow(ring),
+         " vertices, read from ", aoi_src$source, ")")
+  log_info(sprintf("ring spans %.4f..%.4f E, %.4f..%.4f N",
+                   min(ring$lon), max(ring$lon), min(ring$lat), max(ring$lat)))
+  # Confirm the geometry Earth Engine actually built matches what was read.
+  a_km2 <- aoi$area(maxError = 100)$getInfo() / 1e6
+  log_info(sprintf("Earth Engine reports the AOI area as %.0f km2", a_km2))
+  if (!is.finite(a_km2) || a_km2 < 100 || a_km2 > 50000) {
+    fail_loudly("The AOI Earth Engine built is not the AOI that was written",
+                sprintf("Area came back as %.1f km2, which is implausible.", a_km2),
+                remedy = "Re-run 13_aoi_boundary.R and check aoi_vertices.csv.")
+  }
+  log_ok("AOI round-trip verified against Earth Engine")
 } else {
   bb <- CFG$aoi_bbox
   aoi <- ee$Geometry$Rectangle(c(bb[["xmin"]], bb[["ymin"]],
                                  bb[["xmax"]], bb[["ymax"]]))
-  log_warn("aoi_coast_oriented.geojson not found; falling back to the ",
-           "axis-aligned box. Run 13_aoi_boundary.R for the oriented AOI.")
+  log_warn("No usable AOI file found; falling back to the axis-aligned box. ",
+           "Run 13_aoi_boundary.R for the coast-oriented AOI.")
 }
 
 pts <- ee$FeatureCollection(lapply(seq_len(nrow(cores)), function(i) {

@@ -143,6 +143,111 @@ write_geojson_polygon <- function(lon, lat, path, props = list()) {
   invisible(path)
 }
 
+#' Read the outer ring of the first Polygon in a GeoJSON file.
+#'
+#' Deliberately NOT a general GeoJSON parser, and deliberately not a regex over
+#' the whole file. Scraping every decimal number out of a GeoJSON also collects
+#' the property values -- bearing, area, buffer widths -- and pairing those as
+#' coordinates yields a plausible-looking ring that is entirely wrong. This
+#' locates the "coordinates" key, walks the bracket nesting to isolate exactly
+#' that value, and reads coordinate pairs only from inside it.
+#'
+#' Returns a data frame of lon/lat, validated. Pure.
+read_geojson_polygon <- function(path) {
+  if (!file.exists(path)) {
+    fail_loudly("GeoJSON not found", paste0("Expected: ", path),
+                remedy = "Run 13_aoi_boundary.R first.")
+  }
+  txt <- paste(readLines(path, warn = FALSE), collapse = " ")
+
+  key <- regexpr('"coordinates"', txt, fixed = TRUE)
+  if (key < 0) {
+    fail_loudly("GeoJSON contains no \"coordinates\" key",
+                paste0("File: ", path),
+                remedy = "Regenerate the AOI with 13_aoi_boundary.R.")
+  }
+  rest  <- substring(txt, key + attr(key, "match.length"))
+  start <- regexpr("[", rest, fixed = TRUE)
+  if (start < 0) {
+    fail_loudly("GeoJSON coordinates value is not an array",
+                paste0("File: ", path))
+  }
+
+  # Walk the brackets to find where this value ends.
+  chars <- strsplit(substring(rest, start), "")[[1]]
+  depth <- 0L; end <- NA_integer_
+  for (i in seq_along(chars)) {
+    if (chars[i] == "[") depth <- depth + 1L
+    if (chars[i] == "]") {
+      depth <- depth - 1L
+      if (depth == 0L) { end <- i; break }
+    }
+  }
+  if (is.na(end)) {
+    fail_loudly("GeoJSON coordinates array is not closed",
+                paste0("File: ", path),
+                remedy = "The file is truncated; regenerate it.")
+  }
+  block <- paste(chars[seq_len(end)], collapse = "")
+
+  # Innermost [x, y] pairs inside that block are the coordinates, and nothing
+  # else in the file can reach here.
+  pat <- "\\[\\s*(-?[0-9]+(?:\\.[0-9]+)?(?:[eE][-+]?[0-9]+)?)\\s*,\\s*(-?[0-9]+(?:\\.[0-9]+)?(?:[eE][-+]?[0-9]+)?)\\s*\\]"
+  m <- regmatches(block, gregexpr(pat, block))[[1]]
+  if (!length(m)) {
+    fail_loudly("No coordinate pairs found in the GeoJSON polygon",
+                paste0("File: ", path))
+  }
+  nums <- lapply(m, function(s) {
+    v <- as.numeric(regmatches(s, gregexpr("-?[0-9]+(?:\\.[0-9]+)?(?:[eE][-+]?[0-9]+)?", s))[[1]])
+    v[1:2]
+  })
+  ring <- data.frame(lon = vapply(nums, `[`, numeric(1), 1),
+                     lat = vapply(nums, `[`, numeric(1), 2))
+
+  # Validate rather than trust: a ring read wrongly must fail here, loudly,
+  # not silently become an AOI on the wrong part of the planet.
+  if (nrow(ring) < 4) {
+    fail_loudly("GeoJSON polygon has too few vertices",
+                sprintf("Found %d; a closed ring needs at least 4.", nrow(ring)))
+  }
+  if (any(abs(ring$lon) > 180) || any(abs(ring$lat) > 90)) {
+    fail_loudly("GeoJSON polygon contains impossible coordinates",
+                sprintf("lon range %.3f..%.3f, lat range %.3f..%.3f",
+                        min(ring$lon), max(ring$lon),
+                        min(ring$lat), max(ring$lat)),
+                remedy = "The file is malformed; regenerate with 13_aoi_boundary.R.")
+  }
+  closed <- ring$lon[1] == ring$lon[nrow(ring)] &&
+            ring$lat[1] == ring$lat[nrow(ring)]
+  if (!closed) {
+    ring <- rbind(ring, ring[1, , drop = FALSE])
+  }
+  ring
+}
+
+#' Read the AOI ring, preferring the plain vertex table over the GeoJSON.
+#'
+#' 13 writes both. The CSV cannot be misparsed, so it is tried first and the
+#' GeoJSON reader is the fallback for an AOI supplied from elsewhere.
+read_aoi_ring <- function(dir_spatial) {
+  csv <- file.path(dir_spatial, "aoi_vertices.csv")
+  if (file.exists(csv)) {
+    r <- utils::read.csv(csv, stringsAsFactors = FALSE)
+    if (all(c("lon", "lat") %in% names(r)) && nrow(r) >= 4) {
+      return(list(ring = r[, c("lon", "lat")], source = "aoi_vertices.csv"))
+    }
+  }
+  list(ring = read_geojson_polygon(file.path(dir_spatial,
+                                             "aoi_coast_oriented.geojson")),
+       source = "aoi_coast_oriented.geojson")
+}
+
+#' Convert a lon/lat ring to the nested list Earth Engine's Polygon expects.
+ring_to_ee_coords <- function(ring) {
+  lapply(seq_len(nrow(ring)), function(i) c(ring$lon[i], ring$lat[i]))
+}
+
 #' Render an oriented rectangle as an Earth Engine geometry literal, so the AOI
 #' used locally and the AOI used in Earth Engine are provably the same shape.
 ee_polygon_snippet <- function(rect, var_name = "aoi") {

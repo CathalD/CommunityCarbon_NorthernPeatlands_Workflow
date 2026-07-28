@@ -612,6 +612,56 @@ ok(grepl('"name": "test"', gt), "carries properties")
 unlink(gp)
 
 # =============================================================================
+section("read_geojson_polygon -- the parser that bit us")
+# =============================================================================
+# The failure this guards against: an earlier reader scraped every decimal
+# number out of the GeoJSON, including PROPERTY values (bearing 142.91, area
+# 2758.4, buffers ...), and paired them as coordinates. It produced a ring that
+# looked plausible and was wrong. So the fixture below deliberately carries
+# properties whose values would corrupt a naive parse.
+gp2 <- tempfile(fileext = ".geojson")
+write_geojson_polygon(rect$lon, rect$lat, gp2,
+                      props = list(name = "test", bearing_deg = 142.91,
+                                   area_km2 = 2758.4, width_km = 33.0))
+ring <- read_geojson_polygon(gp2)
+ok(nrow(ring) == 5, "reads exactly the ring vertices, not the properties")
+# The writer emits %.8f, i.e. ~1 mm on the ground at this latitude, so the
+# round-trip tolerance is set to the write precision rather than to zero.
+eq(ring$lon, rect$lon, "longitudes round-trip to write precision", tol = 1e-7)
+eq(ring$lat, rect$lat, "latitudes round-trip to write precision", tol = 1e-7)
+ok(max(abs(ring$lon - rect$lon)) * 111320 * cos(56 * pi / 180) < 0.01,
+   "longitude round-trip error is under a centimetre on the ground")
+ok(ring$lon[1] == ring$lon[nrow(ring)] && ring$lat[1] == ring$lat[nrow(ring)],
+   "returned ring is closed")
+
+# The naive approach, reproduced, must disagree -- proving the fixture is a
+# real trap and not a vacuous test.
+naive_txt <- paste(readLines(gp2, warn = FALSE), collapse = " ")
+naive_nums <- as.numeric(regmatches(naive_txt,
+                gregexpr("-?[0-9]+\\.[0-9]+", naive_txt))[[1]])
+ok(length(naive_nums) > 2 * nrow(ring),
+   "a whole-file number scrape picks up more numbers than there are coordinates")
+
+ok(all(abs(ring$lon) <= 180) && all(abs(ring$lat) <= 90),
+   "parsed coordinates are geographically possible")
+unlink(gp2)
+
+# Malformed input must fail loudly, not return something usable.
+bad <- tempfile(fileext = ".geojson")
+writeLines('{"type":"FeatureCollection","features":[]}', bad)
+throws(read_geojson_polygon(bad), "STOPS when there is no coordinates key")
+writeLines('{"coordinates": [[[0,0],[1,1]]]}', bad)
+throws(read_geojson_polygon(bad), "STOPS when the ring has too few vertices")
+writeLines('{"coordinates": [[[0,0],[999,0],[999,999],[0,999],[0,0]]]}', bad)
+throws(read_geojson_polygon(bad), "STOPS on impossible coordinates")
+unlink(bad)
+
+# ring_to_ee_coords shape.
+ec <- ring_to_ee_coords(data.frame(lon = c(1, 2, 3), lat = c(4, 5, 6)))
+ok(is.list(ec) && length(ec) == 3 && identical(ec[[1]], c(1, 4)),
+   "ring converts to the nested list Earth Engine expects")
+
+# =============================================================================
 section("isTRUE_vec")
 # =============================================================================
 ok(identical(isTRUE_vec(c(TRUE, FALSE, NA)), c(TRUE, FALSE, FALSE)),

@@ -164,6 +164,16 @@ write_geojson_polygon(rect$lon, rect$lat,
                         crs = "EPSG:4326"))
 log_ok("wrote aoi_coast_oriented.geojson")
 
+# A plain vertex table alongside the GeoJSON. Downstream scripts read this in
+# preference, because a two-column CSV cannot be misparsed the way a JSON file
+# can -- an earlier version of 15 scraped every number out of the GeoJSON,
+# including the property values, and silently built a wrong AOI from them.
+write_csv_logged(data.frame(vertex = seq_along(rect$lon),
+                            lon = rect$lon, lat = rect$lat,
+                            stringsAsFactors = FALSE),
+                 file.path(dir_sp, "aoi_vertices.csv"),
+                 "AOI ring as plain lon/lat, for unambiguous downstream reading")
+
 # Earth Engine literal, so the AOI used here and in GEE are the same shape.
 snippet <- c(
   "// Fort Severn coast-oriented AOI",
