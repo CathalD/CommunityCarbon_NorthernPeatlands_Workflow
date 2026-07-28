@@ -336,6 +336,166 @@ if (got(tbl("11_implied_shallow_fraction.csv"))) {
 }
 
 # =============================================================================
+add("# The area this study covers")
+blank()
+if (got(tbl("13_aoi_definition.csv"))) {
+  ad <- read_csv_verbatim(tbl("13_aoi_definition.csv"))
+  gv <- function(k) ad$value[ad$property == k]
+  add("The study area is a long rectangle that **follows the Hudson Bay ",
+      "coastline** rather than being drawn square to north. The coast here ",
+      "runs north-west to south-east, and so does the sampling, so a ",
+      "north-up box would either cut off the ends of the transect or waste ",
+      "most of its area over open water.")
+  blank()
+  add("The direction was not drawn by eye. It was calculated from the cores ",
+      "themselves -- the line they best fall along -- giving **",
+      gv("bearing_deg"), "degrees from north**. The area measures **",
+      gv("length_km"), " km long by ", gv("width_km"), " km wide (",
+      gv("area_km2"), " km^2^)**, including a ", gv("along_buffer_km"),
+      " km buffer beyond the cores at each end and ", gv("across_buffer_km"),
+      " km on each side.")
+  blank()
+}
+fig("13_aoi_coast_oriented.png",
+    "The coast-following study area. The dotted box is the earlier north-up version.")
+if (got(tbl("13_cores_coast_relative.csv"))) {
+  cr <- read_csv_verbatim(tbl("13_cores_coast_relative.csv"))
+  pk <- cr$across_km[grepl("peat", cr$campaign)]
+  mn <- cr$across_km[!grepl("peat", cr$campaign)]
+  if (length(pk) && length(mn) && min(pk) > max(mn)) {
+    add("::: {.callout-warning}")
+    add("## Something the ordinary map hides")
+    blank()
+    add("Measured across the coastline rather than in latitude and longitude, ",
+        "**every peat core sits on one side of the sampling line and every ",
+        "mineral core on the other** (peat ",
+        sprintf("%.1f to %.1f km", min(pk), max(pk)), ", mineral ",
+        sprintf("%.1f to %.1f km", min(mn), max(mn)), " across).")
+    blank()
+    add("This matters when interpreting any peat-versus-mineral comparison. ",
+        "The two groups differ in soil type, but they also differ in **year ",
+        "sampled, field team, laboratory method, and now position across the ",
+        "landscape**. Those things cannot be separated with this dataset. A ",
+        "difference between the groups is a difference between two sets of ",
+        "cores; calling it purely a soil-type effect would be going beyond ",
+        "the evidence.")
+    add(":::")
+    blank()
+  }
+}
+
+# =============================================================================
+add("# Carbon by ecosystem type")
+blank()
+if (got(tbl("15_carbon_by_landcover.csv"))) {
+  lcz <- read_csv_verbatim(tbl("15_carbon_by_landcover.csv"))
+  prim <- lcz[lcz$landcover_source == "GWL_FCS30" &
+              lcz$depth_support == "0-30 cm", ]
+  if (nrow(prim)) {
+    add("Different kinds of ground hold different amounts of carbon. This ",
+        "table splits the study area by ecosystem and gives the average ",
+        "carbon in the top 30 cm of each, taken from published maps:")
+    blank()
+    t2 <- data.frame(
+      Ecosystem = prim$label,
+      `Area (km2)` = round(prim$area_km2, 1),
+      `Share of area` = paste0(round(prim$pct_of_aoi, 1), "%"),
+      `Average carbon (kg C/m2)` = round(prim$mean_kgm2, 2),
+      check.names = FALSE, stringsAsFactors = FALSE)
+    if ("has_core" %in% names(prim)) {
+      t2[["Any core here?"]] <- ifelse(prim$has_core, "yes", "NO")
+    }
+    add(md_table(t2))
+    blank()
+  }
+  if (got(tbl("15_ecosystem_verification.csv"))) {
+    ev <- read_csv_verbatim(tbl("15_ecosystem_verification.csv"))
+    unv <- sum(ev$pct_of_aoi[!isTRUE_vec(ev$has_core)], na.rm = TRUE)
+    add("::: {.callout-important}")
+    add("## Which of these numbers has been checked on the ground?")
+    blank()
+    add(sprintf("**%.0f%% of the study area** lies in ecosystem types where no ",
+                unv),
+        "core has ever been taken. Those rows come entirely from published ",
+        "maps built elsewhere, with nothing local to test them against. The ",
+        "rows that do contain a core are the only ones with any local ",
+        "verification at all.")
+    add(":::")
+    blank()
+  }
+  add("Two land-cover maps are used. The main one (GWL_FCS30) can tell ",
+      "wetland types apart. The widely used alternative (ESA WorldCover) ",
+      "cannot separate **treed bog growing on deep peat** from **spruce ",
+      "forest on ordinary mineral soil** -- both simply read as tree cover. ",
+      "In this landscape that is exactly the distinction that decides carbon, ",
+      "which is why the wetland-aware map is preferred here.")
+  blank()
+} else {
+  add("This section needs the ecosystem analysis (`15_landcover_carbon.R`), ",
+      "which requires a Google Earth Engine session. Once it has run, this ",
+      "section fills in automatically with carbon per ecosystem type and a ",
+      "note of which ecosystems have been visited.")
+  blank()
+}
+
+# =============================================================================
+add("# Finding distinct areas from satellite data")
+blank()
+if (got(tbl("16_cluster_carbon.csv"))) {
+  cc <- read_csv_verbatim(tbl("16_cluster_carbon.csv"))
+  sgc <- cc[cc$carbon_layer == "SoilGrids 0-30 cm", ]
+  add("Ecosystem categories are coarse. Two places both labelled \"swamp\" ",
+      "can be quite different ground. To find finer distinctions we used a ",
+      "method called **clustering**: the computer groups together places that ",
+      "*look alike to a satellite* across a whole year -- their colour, ",
+      "their wetness, how they change with the seasons -- without being told ",
+      "anything about carbon.")
+  blank()
+  add("This is worth trusting more than it might sound. The grouping never ",
+      "sees a single carbon measurement, so it cannot be bent by our eight ",
+      "cores. It works from millions of satellite pixels.")
+  blank()
+  if (nrow(sgc)) {
+    t3 <- data.frame(
+      `Landscape type` = paste("Type", sgc$cluster),
+      `Share of area` = paste0(round(sgc$pct_of_aoi, 1), "%"),
+      `Average carbon (kg C/m2)` = round(sgc$mean_kgm2, 2),
+      check.names = FALSE, stringsAsFactors = FALSE)
+    if ("has_core" %in% names(sgc)) {
+      t3[["Visited?"]] <- ifelse(isTRUE_vec(sgc$has_core), "yes", "never")
+    }
+    add(md_table(t3))
+    blank()
+    if ("has_core" %in% names(sgc)) {
+      nv <- sum(!isTRUE_vec(sgc$has_core))
+      gap <- sum(sgc$pct_of_aoi[!isTRUE_vec(sgc$has_core)], na.rm = TRUE)
+      add("::: {.callout-tip}")
+      add("## Where the next cores should go")
+      blank()
+      add(sprintf("**%d of the %d landscape types have never been sampled**, ",
+                  nv, nrow(sgc)),
+          sprintf("covering about %.0f%% of the study area.", gap),
+          " Those are the highest-value places for the next field season. A ",
+          "core taken in a landscape type nobody has visited teaches far more ",
+          "than another core beside an existing one.")
+      blank()
+      add("The map `ccnp_clusters_without_cores.tif` shows exactly where ",
+          "these are, and can be opened in any mapping software to plan a ",
+          "trip.")
+      add(":::")
+      blank()
+    }
+  }
+} else {
+  add("This section needs the clustering analysis ",
+      "(`16_embedding_clusters.R`), which requires a Google Earth Engine ",
+      "session. Once it has run, this section fills in with the distinct ",
+      "landscape types found, the carbon in each, and -- most usefully -- ",
+      "which types have never been visited and should be sampled next.")
+  blank()
+}
+
+# =============================================================================
 add("# How Fort Severn compares")
 blank()
 add("Comparisons only mean something when the depths match. Putting a 0-30 cm ",
@@ -367,6 +527,107 @@ add("The last row is roughly **",
     "studies. It is the carbon that lies below 30 cm, which the shallow ",
     "numbers never counted.")
 blank()
+
+add("## Against the rest of Canada")
+blank()
+if (got(tbl("14_npdb_proximity.csv")) && got(tbl("14_npdb_quantiles.csv"))) {
+  prox <- read_csv_verbatim(tbl("14_npdb_proximity.csv"))
+  nq   <- read_csv_verbatim(tbl("14_npdb_quantiles.csv"))
+  add("Agriculture and Agri-Food Canada keeps a national record of soil ",
+      "profiles, the National Pedon Database. After the same quality checks ",
+      "applied to the community cores, it yields several hundred cores across ",
+      "the country that can be compared like for like at 0-30 cm.")
+  blank()
+  add("::: {.callout-important}")
+  add("## These cores are the only soil carbon data for this area")
+  blank()
+  nearest_txt <- if (got(drv("14_npdb_cores_qc.csv"))) {
+    nq2 <- read_csv_verbatim(drv("14_npdb_cores_qc.csv"))
+    # NPDB province names are lowercase; title-case them for prose.
+    prov <- nq2$province[which.min(nq2$dist_fort_severn_km)]
+    prov <- gsub("(^|[ -])([a-z])", "\\1\\U\\2", prov, perl = TRUE)
+    sprintf("about %.0f km away, in %s",
+            min(nq2$dist_fort_severn_km, na.rm = TRUE), prov)
+  } else "several hundred kilometres away"
+  add("**There is not one core in the national database within 500 km of ",
+      "Fort Severn.** The nearest usable one is ", nearest_txt, ".")
+  blank()
+  add(md_table(data.frame(
+    `Distance from Fort Severn` = paste("within", prox$within_km, "km"),
+    `Existing cores in the national record` = prox$n_npdb_cores,
+    check.names = FALSE, stringsAsFactors = FALSE)))
+  blank()
+  add("Every published carbon map that covers Fort Severn is, in this ",
+      "neighbourhood, working from measurements taken hundreds of kilometres ",
+      "away. That is not a criticism of those maps -- it is simply what the ",
+      "available data allowed. It is also the clearest argument for the ",
+      "community sampling programme: **these eight cores are not just few, ",
+      "they are all there is.**")
+  add(":::")
+  blank()
+
+  if (got(tbl("14_fort_severn_percentiles.csv"))) {
+    pc <- read_csv_verbatim(tbl("14_fort_severn_percentiles.csv"))
+    add("Where the community cores sit in the national range:")
+    blank()
+    add(md_table(data.frame(
+      Core = pc$core_id,
+      Type = ifelse(grepl("peat", pc$campaign), "Peatland", "Forest/mineral"),
+      `Carbon 0-30 cm (kg C/m2)` = round(pc$stock_kgm2, 2),
+      `Higher than this share of Canadian cores` =
+        paste0(round(pc$national_percentile), "%"),
+      check.names = FALSE, stringsAsFactors = FALSE)))
+    blank()
+    add("They fall between roughly the ", round(min(pc$national_percentile)),
+        "th and ", round(max(pc$national_percentile)),
+        "th percentile -- comfortably within the national range. That is ",
+        "reassuring: it means the community sampling and laboratory work are ",
+        "producing numbers of the kind the national record contains, not ",
+        "outliers that would suggest a problem.")
+    blank()
+  }
+  fig("14_national_distribution.png",
+      "The community cores against several hundred Canadian cores measured to the same depth.")
+  fig("14_npdb_coverage_map.png",
+      "Where Canada's soil carbon cores are. The gap around Fort Severn is the point.")
+
+  if (got(tbl("14_organic_vs_mineral.csv"))) {
+    ov <- read_csv_verbatim(tbl("14_organic_vs_mineral.csv"))
+    add("### Does the surprising result hold up elsewhere?")
+    blank()
+    add("Earlier we found that the peat cores held *less* carbon than the ",
+        "forest cores in the shallow layer. The national record lets us check ",
+        "whether that is a general pattern or a local quirk.")
+    blank()
+    add(md_table(data.frame(
+      `Soil type` = ov$group, `Cores` = ov$n,
+      `Median carbon 0-30 cm (kg C/m2)` = round(ov$median_kgm2, 2),
+      `Middle half of the range` = paste0(round(ov$q25, 1), " to ",
+                                          round(ov$q75, 1)),
+      check.names = FALSE, stringsAsFactors = FALSE)))
+    blank()
+    add("The same ordering appears nationally -- organic soils hold slightly ",
+        "less in the top 30 cm. **But the difference is small and the two ",
+        "groups overlap heavily.**")
+    if ("p_organic_exceeds_mineral" %in% names(ov)) {
+      add(" Pick a random organic core and a random mineral one, and the ",
+          "organic one is higher ",
+          round(100 * ov$p_organic_exceeds_mineral[1]), "% of the time -- ",
+          "close to a coin toss.")
+    }
+    blank()
+    add("So this is **support, not proof**. The national record is consistent ",
+        "with what the community cores found and gives no reason to suspect a ",
+        "local error. What it does *not* support is a strong claim that ",
+        "organic soils reliably hold less carbon near the surface; they are ",
+        "simply far more variable.")
+    blank()
+    add("The point that survives is the one that matters: **counting only the ",
+        "top 30 cm does not show peatlands to advantage.** Their importance ",
+        "lies in depth, and a shallow measurement cannot see it.")
+    blank()
+  }
+}
 
 if (got(tbl("07_reference_benchmark.csv"))) {
   add("## Against other published maps")
@@ -459,10 +720,44 @@ add("Every figure in this report is produced by the analysis scripts in this ",
     "companion, including all quality-control findings and validation, is in ",
     "`REPORT.qmd`.")
 blank()
-add("Maps are supplied as GeoTIFF files in `outputs/spatial/`, ready to open ",
-    "in ArcGIS, QGIS or Google Earth Engine. Each carries a label stating ",
-    "what it is and what depth it refers to; `MANIFEST.csv` and ",
-    "`MANIFEST_bayes.csv` list them.")
+add("## The maps, and what each one may be used for")
+blank()
+add("All maps are GeoTIFF files that open directly in ArcGIS, QGIS or Google ",
+    "Earth Engine. Anything built in Earth Engine is saved **both to Google ",
+    "Drive and to a local folder**, so it can be shared and can also be ",
+    "opened straight away.")
+blank()
+add("Every map carries a **status label**, and it is worth reading before ",
+    "using one:")
+blank()
+add(md_table(data.frame(
+  Status = c("OBSERVATION", "GEOMETRY", "SAMPLE-BASED, MASKED",
+             "CLASS-MEAN ASSIGNMENT", "PRIOR-DOMINATED", "DIAGNOSTIC"),
+  `What it means` = c(
+    "Measured in the field. The most trustworthy thing here.",
+    "Pure geometry, such as distance to the nearest core. Exact, nothing inferred.",
+    "Built from the cores, and blank wherever no core is close enough to speak.",
+    "Every pixel carries its group's average. Real variation within a group is not shown.",
+    "Mostly a published map, nudged by the cores where they are near.",
+    "Shown to reveal a problem or a gap. NOT a carbon estimate."),
+  check.names = FALSE, stringsAsFactors = FALSE)))
+blank()
+sp_dir <- file.path(CFG$root, "outputs", "spatial")
+inv <- character(0)
+for (mf in c("MANIFEST.csv", "MANIFEST_bayes.csv")) {
+  p <- file.path(sp_dir, mf)
+  if (file.exists(p)) {
+    m <- read_csv_verbatim(p)
+    col <- intersect(c("file", "units", "scientific_status", "meaning",
+                       "depth_support"), names(m))
+    inv <- c(inv, md_table(m[, col]), "")
+  }
+}
+if (length(inv)) { add(inv); blank() }
+add("The one to be most careful with is any map whose name begins ",
+    "`DIAGNOSTIC_`. Those exist to make a limitation visible -- usually how ",
+    "little of the area the cores can speak for -- and reading them as carbon ",
+    "estimates would be a mistake.")
 blank()
 add("Key sources: Li et al. (2025) for Hudson Bay Lowlands peat depth and ",
     "carbon; Sothe et al. (2022) for Canada-wide soil carbon; SoilGrids 2.0 ",

@@ -334,6 +334,61 @@ for (g in regmatches(cr, gregexpr("figures/[A-Za-z0-9_]+\\.png", cr))[[1]]) {
 ok(!file.exists(file.path(sandbox, "outputs", "REPORT.md")),
    "the superseded Markdown report is removed, so two versions cannot drift")
 
+# The report must cover the whole analysis, and must degrade gracefully where
+# an Earth Engine step has not run rather than emitting an empty section.
+ok(grepl("The area this study covers", cr), "report covers the AOI")
+ok(grepl("Carbon by ecosystem type", cr), "report covers ecosystem carbon")
+ok(grepl("Finding distinct areas from satellite data", cr),
+   "report covers the embedding clusters")
+ok(grepl("Against the rest of Canada", cr), "report covers national context")
+ok(grepl("The maps, and what each one may be used for", cr),
+   "report inventories the map products and their status labels")
+ok(grepl("Google Earth Engine session", cr),
+   "sections awaiting Earth Engine say so instead of appearing empty")
+ok(!grepl("NA km|NA%|kg C/m2\\s*NA", cr),
+   "no NA leaks into the plain-language text")
+
+# Status vocabulary must be defined for the reader, not just used.
+for (lab in c("OBSERVATION", "DIAGNOSTIC", "CLASS-MEAN ASSIGNMENT")) {
+  ok(grepl(lab, cr, fixed = TRUE),
+     paste("status label explained to the reader:", lab))
+}
+
+# =============================================================================
+section("13 AOI and 14 NPDB")
+# =============================================================================
+r13 <- run("13_aoi_boundary.R")
+ok(is.null(r13$status), "13 exits cleanly")
+sp13 <- function(f) file.path(sandbox, "outputs", "spatial", f)
+for (f in c("aoi_coast_oriented.geojson", "aoi_vertices.csv",
+            "aoi_coast_oriented_mask.tif", "aoi_for_earthengine.js")) {
+  ok(file.exists(sp13(f)), paste("13 writes", f))
+}
+# The vertex table and the GeoJSON must describe the same ring.
+av <- read.csv(sp13("aoi_vertices.csv"))
+ok(nrow(av) == 5 && av$lon[1] == av$lon[5] && av$lat[1] == av$lat[5],
+   "aoi_vertices.csv is a closed 5-vertex ring")
+ok(all(av$lon < 0) && all(av$lat > 50 & av$lat < 60),
+   "AOI vertices are in the right hemisphere and latitude band")
+
+adef <- read.csv(file.path(sandbox, "outputs", "tables", "13_aoi_definition.csv"))
+bd <- as.numeric(adef$value[adef$property == "bearing_deg"])
+ok(is.finite(bd) && abs(bd - 135) < 45,
+   "AOI bearing is within 45 degrees of the NW-SE coastal trend")
+
+r14 <- run("14_npdb_context.R")
+ok(is.null(r14$status), "14 exits cleanly")
+ok(grepl("ONLY SOIL CARBON DATA", r14$out),
+   "14 reports that the community cores are the only local data")
+np <- read.csv(file.path(sandbox, "outputs", "tables", "14_npdb_proximity.csv"))
+ok(np$n_npdb_cores[np$within_km == 500] == 0,
+   "no national core lies within 500 km of Fort Severn")
+ov <- read.csv(file.path(sandbox, "outputs", "tables", "14_organic_vs_mineral.csv"))
+ok("wilcoxon_p" %in% names(ov) && "p_organic_exceeds_mineral" %in% names(ov),
+   "the national comparison reports effect size, not just a difference in medians")
+ok(ov$p_organic_exceeds_mineral[1] > 0.3 && ov$p_organic_exceeds_mineral[1] < 0.7,
+   "the effect is small enough that the report must not overclaim it")
+
 # ---- summary -----------------------------------------------------------------
 cat("\n", strrep("=", 60), "\n", sep = "")
 cat(sprintf("passed %d   failed %d\n", .pass, .fail))

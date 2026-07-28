@@ -136,6 +136,30 @@ The most valuable thing these cores did was not to change the map. It was to **i
 
 The honest caveat: this rests on 1 peat core(s) that reached 30 cm, at sites where the peat is thin. It is encouraging, not conclusive.
 
+# The area this study covers
+
+The study area is a long rectangle that **follows the Hudson Bay coastline** rather than being drawn square to north. The coast here runs north-west to south-east, and so does the sampling, so a north-up box would either cut off the ends of the transect or waste most of its area over open water.
+
+The direction was not drawn by eye. It was calculated from the cores themselves -- the line they best fall along -- giving **142.91degrees from north**. The area measures **83.6 km long by 33 km wide (2758.4 km^2^)**, including a 30 km buffer beyond the cores at each end and 12 km on each side.
+
+![The coast-following study area. The dotted box is the earlier north-up version.](figures/13_aoi_coast_oriented.png){width=100%}
+
+::: {.callout-warning}
+## Something the ordinary map hides
+
+Measured across the coastline rather than in latitude and longitude, **every peat core sits on one side of the sampling line and every mineral core on the other** (peat 3.6 to 5.1 km, mineral -3.9 to -1.0 km across).
+
+This matters when interpreting any peat-versus-mineral comparison. The two groups differ in soil type, but they also differ in **year sampled, field team, laboratory method, and now position across the landscape**. Those things cannot be separated with this dataset. A difference between the groups is a difference between two sets of cores; calling it purely a soil-type effect would be going beyond the evidence.
+:::
+
+# Carbon by ecosystem type
+
+This section needs the ecosystem analysis (`15_landcover_carbon.R`), which requires a Google Earth Engine session. Once it has run, this section fills in automatically with carbon per ecosystem type and a note of which ecosystems have been visited.
+
+# Finding distinct areas from satellite data
+
+This section needs the clustering analysis (`16_embedding_clusters.R`), which requires a Google Earth Engine session. Once it has run, this section fills in with the distinct landscape types found, the carbon in each, and -- most usefully -- which types have never been visited and should be sampled next.
+
 # How Fort Severn compares
 
 Comparisons only mean something when the depths match. Putting a 0-30 cm number next to a full-peat-column number is like comparing the top shelf of a bookcase with the whole bookcase.
@@ -148,6 +172,57 @@ Comparisons only mean something when the depths match. Putting a 0-30 cm number 
 | Hudson Bay Lowlands peat (Li et al. 2025) | whole peat column (~184 cm) | 86 (+/- 35) | NO -- different depth entirely |
 
 The last row is roughly **10 times** the 0-30 cm figures above it. That gap is not disagreement between studies. It is the carbon that lies below 30 cm, which the shallow numbers never counted.
+
+## Against the rest of Canada
+
+Agriculture and Agri-Food Canada keeps a national record of soil profiles, the National Pedon Database. After the same quality checks applied to the community cores, it yields several hundred cores across the country that can be compared like for like at 0-30 cm.
+
+::: {.callout-important}
+## These cores are the only soil carbon data for this area
+
+**There is not one core in the national database within 500 km of Fort Severn.** The nearest usable one is about 700 km away, in Manitoba.
+
+| Distance from Fort Severn | Existing cores in the national record |
+|---|---|
+| within 500 km | 0 |
+| within 1000 km |      27 |
+| within 2000 km |     316 |
+
+Every published carbon map that covers Fort Severn is, in this neighbourhood, working from measurements taken hundreds of kilometres away. That is not a criticism of those maps -- it is simply what the available data allowed. It is also the clearest argument for the community sampling programme: **these eight cores are not just few, they are all there is.**
+:::
+
+Where the community cores sit in the national range:
+
+| Core | Type | Carbon 0-30 cm (kg C/m2) | Higher than this share of Canadian cores |
+|---|---|---|---|
+| FS-01 | Forest/mineral |   14.26 | 89% |
+| FS-02 | Forest/mineral |    8.38 | 65% |
+| FS-03 | Forest/mineral |    4.22 | 24% |
+| FS-04 | Forest/mineral |    8.76 | 67% |
+| FS-05 | Forest/mineral |    6.11 | 45% |
+| PM-03-A | Peatland |   10.02 | 73% |
+
+They fall between roughly the 24th and 89th percentile -- comfortably within the national range. That is reassuring: it means the community sampling and laboratory work are producing numbers of the kind the national record contains, not outliers that would suggest a problem.
+
+![The community cores against several hundred Canadian cores measured to the same depth.](figures/14_national_distribution.png){width=100%}
+
+![Where Canada's soil carbon cores are. The gap around Fort Severn is the point.](figures/14_npdb_coverage_map.png){width=100%}
+
+### Does the surprising result hold up elsewhere?
+
+Earlier we found that the peat cores held *less* carbon than the forest cores in the shallow layer. The national record lets us check whether that is a general pattern or a local quirk.
+
+| Soil type | Cores | Median carbon 0-30 cm (kg C/m2) | Middle half of the range |
+|---|---|---|---|
+| organic horizon present |     157 |    6.23 | 2.4 to 11.4 |
+| no organic horizon |     192 |    7.15 | 5.3 to 9.8 |
+
+The same ordering appears nationally -- organic soils hold slightly less in the top 30 cm. **But the difference is small and the two groups overlap heavily.**
+ Pick a random organic core and a random mineral one, and the organic one is higher 43% of the time -- close to a coin toss.
+
+So this is **support, not proof**. The national record is consistent with what the community cores found and gives no reason to suspect a local error. What it does *not* support is a strong claim that organic soils reliably hold less carbon near the surface; they are simply far more variable.
+
+The point that survives is the one that matters: **counting only the top 30 cm does not show peatlands to advantage.** Their importance lies in depth, and a shallow measurement cannot see it.
 
 ## Against other published maps
 
@@ -181,7 +256,39 @@ A like-for-like comparison against the global SoilGrids product and the Canada-w
 
 Every figure in this report is produced by the analysis scripts in this repository from the raw core data, and can be regenerated with `Rscript run_all.R`. Nothing is typed in by hand. The technical companion, including all quality-control findings and validation, is in `REPORT.qmd`.
 
-Maps are supplied as GeoTIFF files in `outputs/spatial/`, ready to open in ArcGIS, QGIS or Google Earth Engine. Each carries a label stating what it is and what depth it refers to; `MANIFEST.csv` and `MANIFEST_bayes.csv` list them.
+## The maps, and what each one may be used for
+
+All maps are GeoTIFF files that open directly in ArcGIS, QGIS or Google Earth Engine. Anything built in Earth Engine is saved **both to Google Drive and to a local folder**, so it can be shared and can also be opened straight away.
+
+Every map carries a **status label**, and it is worth reading before using one:
+
+| Status | What it means |
+|---|---|
+| OBSERVATION | Measured in the field. The most trustworthy thing here. |
+| GEOMETRY | Pure geometry, such as distance to the nearest core. Exact, nothing inferred. |
+| SAMPLE-BASED, MASKED | Built from the cores, and blank wherever no core is close enough to speak. |
+| CLASS-MEAN ASSIGNMENT | Every pixel carries its group's average. Real variation within a group is not shown. |
+| PRIOR-DOMINATED | Mostly a published map, nudged by the cores where they are near. |
+| DIAGNOSTIC | Shown to reveal a problem or a gap. NOT a carbon estimate. |
+
+| file | units | scientific_status | depth_support |
+|---|---|---|---|
+| cores.geojson | mixed | OBSERVATION -- measured cores | see attributes |
+| aoi.geojson | n/a | n/a -- study area outline | n/a |
+| dist_to_nearest_core_m.tif | metres | GEOMETRY -- exact, no inference | n/a |
+| nearest_core_index.tif | core index (see legend) | DIAGNOSTIC -- Thiessen assignment | n/a |
+| DIAGNOSTIC_soc_nearest_core_kgm2.tif | kg C/m2 | DIAGNOSTIC -- NOT a carbon map; nearest core's value, unmasked | 0-14.5 cm (common support) |
+| PRODUCT1b_soc_within_credible_radius_kgm2.tif | kg C/m2 | SAMPLE-BASED, MASKED -- nearest core's value within the credible radius only | 0-14.5 cm (common support) |
+
+| file | units | meaning | depth_support |
+|---|---|---|---|
+| DEMO_BAYES_fullcolumn_mean_kgm2.tif | kg C/m2 | posterior mean full peat column carbon | FULL PEAT COLUMN -- never compare with a 0-30 cm layer |
+| DEMO_BAYES_fullcolumn_sd_kgm2.tif | kg C/m2 | posterior standard deviation | FULL PEAT COLUMN -- never compare with a 0-30 cm layer |
+| DEMO_BAYES_fullcolumn_core_info_fraction.tif | fraction 0-1 | share of the answer coming from the cores rather than the prior | FULL PEAT COLUMN -- never compare with a 0-30 cm layer |
+| DEMO_BAYES_fullcolumn_shift_from_prior_kgm2.tif | kg C/m2 | how far the cores moved the published value | FULL PEAT COLUMN -- never compare with a 0-30 cm layer |
+
+
+The one to be most careful with is any map whose name begins `DIAGNOSTIC_`. Those exist to make a limitation visible -- usually how little of the area the cores can speak for -- and reading them as carbon estimates would be a mistake.
 
 Key sources: Li et al. (2025) for Hudson Bay Lowlands peat depth and carbon; Sothe et al. (2022) for Canada-wide soil carbon; SoilGrids 2.0 for the global comparison. Full citations are in `config.R`.
 

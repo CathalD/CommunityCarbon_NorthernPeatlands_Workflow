@@ -507,4 +507,41 @@ write_csv_logged(ref_at_cores,
 write_csv_logged(audit, file.path(CFG$dir_tables, "04_reference_audit.csv"),
                  "units and depth support, established by measurement")
 
+# =============================================================================
+# 7. Export the reference rasters -- to Drive AND to local disk
+# =============================================================================
+
+log_step("04f  REFERENCE RASTER EXPORT")
+
+# The local filenames here are not arbitrary: 11_bayesian_map.R looks for
+# exactly these. Landing them in outputs/gee/ upgrades the Bayesian products
+# from DEMO_ (a spatially constant regional prior) to the real published
+# surfaces, with no further action.
+log_info("local names are chosen so 11_bayesian_map.R picks them up ",
+         "automatically and drops its DEMO_ fallback")
+
+exports <- list()
+exports[[1]] <- gee_export_image(
+  li_kgm2$toFloat(), "ccnp_li2025_peat_carbon_30m", aoi,
+  scale = 30, crs = CFG$gee$export_crs, dir_local = CFG$dir_gee)
+exports[[2]] <- gee_export_image(
+  so_kgm2$toFloat(), "ccnp_sothe_sc_0_30_30m", aoi,
+  scale = 250, crs = CFG$gee$export_crs, dir_local = CFG$dir_gee)
+exports[[3]] <- gee_export_image(
+  sg_kgm2$toFloat(), "ccnp_soilgrids_ocs_0_30_30m", aoi,
+  scale = 250, crs = CFG$gee$export_crs, dir_local = CFG$dir_gee)
+if (exists("li_unc") && !is.null(li_unc)) {
+  exports[[4]] <- gee_export_image(
+    li_unc$toFloat(), "ccnp_li2025_uncertainty_30m", aoi,
+    scale = 30, crs = CFG$gee$export_crs, dir_local = CFG$dir_gee)
+}
+
+man <- gee_write_manifest(exports,
+                          file.path(CFG$dir_gee, "04_export_manifest.csv"))
+
+if (!is.null(man) && any(man$status %in% c("drive_and_local", "cached"))) {
+  log_ok("Reference rasters are on disk. Re-run 11_bayesian_map.R to replace ",
+         "the DEMO_ outputs with real prior-based Bayesian maps.")
+}
+
 log_ok("04 complete")

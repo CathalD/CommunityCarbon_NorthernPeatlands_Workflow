@@ -447,42 +447,22 @@ write_csv_logged(dict, file.path(CFG$dir_gee, "03_covariate_dictionary.csv"),
 
 log_step("03f  RASTER EXPORT")
 
-task_pred <- ee_image_to_drive(
-  image       = predictors$toFloat(),
-  description = "ccnp_predictors_30m",
-  folder      = "CCNP_SOC",
-  region      = aoi,
-  scale       = CFG$gee$export_scale_m,
-  crs         = CFG$gee$export_crs,
-  maxPixels   = 1e13
+# Everything goes to Drive AND to local disk. The local copies are what 05
+# reads to build the stratum-mean map and to derive area weights, so landing
+# them here removes a manual retrieval step.
+exports <- list(
+  gee_export_image(predictors$toFloat(), "ccnp_predictors_30m", aoi,
+                   scale = CFG$gee$export_scale_m, crs = CFG$gee$export_crs,
+                   dir_local = CFG$dir_gee),
+  gee_export_image(worldcover$toInt16(), "ccnp_worldcover_30m", aoi,
+                   scale = CFG$gee$export_scale_m, crs = CFG$gee$export_crs,
+                   dir_local = CFG$dir_gee),
+  gee_export_image(gwl$addBands(gwl_wetland)$toInt16(), "ccnp_gwl_fcs30_30m",
+                   aoi, scale = CFG$gee$export_scale_m,
+                   crs = CFG$gee$export_crs, dir_local = CFG$dir_gee)
 )
-task_pred$start()
-log_ok("started export: ccnp_predictors_30m -> Drive/CCNP_SOC")
 
-task_lc <- ee_image_to_drive(
-  image       = worldcover,
-  description = "ccnp_worldcover_30m",
-  folder      = "CCNP_SOC",
-  region      = aoi,
-  scale       = CFG$gee$export_scale_m,
-  crs         = CFG$gee$export_crs,
-  maxPixels   = 1e13
-)
-task_lc$start()
-log_ok("started export: ccnp_worldcover_30m -> Drive/CCNP_SOC")
-
-task_gwl <- ee_image_to_drive(
-  image       = gwl$addBands(gwl_wetland)$toInt16(),
-  description = "ccnp_gwl_fcs30_30m",
-  folder      = "CCNP_SOC",
-  region      = aoi,
-  scale       = CFG$gee$export_scale_m,
-  crs         = CFG$gee$export_crs,
-  maxPixels   = 1e13
-)
-task_gwl$start()
-log_ok("started export: ccnp_gwl_fcs30_30m -> Drive/CCNP_SOC (preferred strata)")
-
-log_info("monitor with rgee::ee_monitoring(), then place the GeoTIFFs in ",
-         CFG$dir_gee)
+gee_write_manifest(exports, file.path(CFG$dir_gee, "03_export_manifest.csv"))
+log_info("with ccnp_gwl_fcs30_30m on disk, 05_stratified_estimate.R can form ",
+         "area-weighted stratum estimates and render PRODUCT 2 as a raster")
 log_ok("03 complete")
