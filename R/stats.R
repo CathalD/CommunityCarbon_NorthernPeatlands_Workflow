@@ -254,12 +254,52 @@ nn_distance_summary <- function(lon, lat, id) {
 #' coefficients.
 fit_ols <- function(x, y) {
   df <- as.data.frame(x)
-  df$..y <- y
-  stats::lm(..y ~ ., data = df)
+
+  # Drop predictors that carry no information WITHIN THIS FOLD. With eight
+  # observations a leave-one-out training set is seven points, and a covariate
+  # that happens to be constant across those seven makes the design matrix
+  # rank-deficient. R would still return a fit and predict() would emit a
+  # "rank-deficient fit ... doubtful cases" warning while handing back a number
+  # -- a number no one should use. Better to remove the column and record that
+  # the fold degenerated.
+  keep <- vapply(df, function(v) {
+    v <- v[is.finite(v)]
+    length(v) > 1L && stats::sd(v) > 0
+  }, logical(1))
+
+  dropped <- names(df)[!keep]
+  df <- df[, keep, drop = FALSE]
+
+  m <- if (ncol(df) == 0L) {
+    # Nothing usable is left: fall back to the intercept, which is the null
+    # model. Honest, and clearly labelled so the caller can count it.
+    structure(list(intercept_only = TRUE, value = mean(y, na.rm = TRUE)),
+              class = "ols_degenerate")
+  } else {
+    df$..y <- y
+    stats::lm(..y ~ ., data = df)
+  }
+  attr(m, "dropped_constant") <- dropped
+  m
 }
 
 predict_ols <- function(model, newx) {
+  if (inherits(model, "ols_degenerate")) {
+    return(rep(model$value, nrow(as.data.frame(newx))))
+  }
   stats::predict(model, newdata = as.data.frame(newx))
+}
+
+#' Skill of one prediction against another, both on the same footing.
+#'
+#' `skill_vs_null()` compares a cross-validated model against the IN-SAMPLE
+#' mean, which is the right question for mapping (the mean you would actually
+#' map is computed from all the data) but holds the model to a stricter
+#' standard than its baseline. This function compares two sets of predictions
+#' that were produced the same way, so a model and a cross-validated null can
+#' be judged like for like. Report both; they answer different questions.
+skill_vs_reference <- function(obs, pred, ref_pred) {
+  1 - rmse(obs, pred) / rmse(obs, ref_pred)
 }
 
 #' Mean-only null model. The benchmark every covariate model must beat before

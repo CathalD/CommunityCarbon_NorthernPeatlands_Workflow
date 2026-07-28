@@ -185,11 +185,68 @@ loco    <- cv_leave_one_group_out(best_x, y, gp, fit_ols, predict_ols)
 log_info("best single covariate (", best$covariate, "), leave-one-core-out:")
 print_table(loco$metrics, digits = 3)
 
+# --- two baselines, because they answer different questions -----------------
+# `skill_null` in the tables above compares a CROSS-VALIDATED model against the
+# IN-SAMPLE mean. That is the right question for mapping, because the mean you
+# would actually paint across the landscape is computed from all the data. But
+# it holds the model to a stricter standard than its baseline, so a model can
+# fail it while still being better than a like-for-like null.
+#
+# So both are reported. The verdict rests on r2_cv, the standard test: do the
+# cross-validated predictions beat simply using the observed mean? A negative
+# r2_cv means they do not.
+skill_lfl <- skill_vs_reference(y, loco$predictions$pred, null_cv$predictions$pred)
+
+log_info("the two baselines, side by side:")
+print_table(data.frame(
+  comparison = c("model (CV) vs in-sample mean   [skill_null]",
+                 "model (CV) vs cross-validated null [like for like]",
+                 "model (CV) vs observed mean        [r2_cv, the standard test]"),
+  value = c(loco$metrics$skill_null, skill_lfl, loco$metrics$r2_cv),
+  verdict = c(ifelse(loco$metrics$skill_null > 0, "beats", "does not beat"),
+              ifelse(skill_lfl > 0, "beats", "does not beat"),
+              ifelse(loco$metrics$r2_cv > 0, "has skill", "NO SKILL")),
+  stringsAsFactors = FALSE), digits = 3)
+
+if (skill_lfl > 0 && loco$metrics$r2_cv <= 0) {
+  log_warn("Note the split decision: the covariate lowers cross-validated RMSE ",
+           sprintf("by %.1f%% against a like-for-like null,", 100 * skill_lfl))
+  log_warn("yet its r2_cv is still negative, meaning the predictions remain ",
+           "worse than simply using the observed mean.")
+  log_warn("Both statements are true. The second is the one that governs ",
+           "whether a map should be drawn, so the verdict below is NO.")
+}
+
 loso <- cv_leave_one_stratum_out(best_x, y, st, fit_ols, predict_ols)
 log_info("best single covariate, leave-one-STRATUM-out:")
 print_table(loso$metrics, digits = 3)
 log_info("per-fold predictions:")
 print_table(loso$predictions, digits = 3)
+
+# Direction and size of the transfer failure, per stratum. A model that has
+# learned nothing transferable pulls each held-out stratum toward the mean of
+# whatever it was trained on, which shows up as equal and opposite bias.
+lo <- loso$predictions
+transfer <- do.call(rbind, lapply(unique(lo$stratum), function(s) {
+  i <- lo$stratum == s & is.finite(lo$pred)
+  data.frame(held_out_stratum = s, n = sum(i),
+             obs_mean = mean(lo$obs[i]), pred_mean = mean(lo$pred[i]),
+             bias = mean(lo$pred[i] - lo$obs[i]),
+             rmse = rmse(lo$obs[i], lo$pred[i]),
+             stringsAsFactors = FALSE)
+}))
+log_info("transfer failure by stratum:")
+print_table(transfer, digits = 3)
+
+if (nrow(transfer) == 2L && prod(sign(transfer$bias)) < 0) {
+  log_warn(sprintf(paste0("The two biases have OPPOSITE signs (%+.2f and ",
+                          "%+.2f kg/m2)."), transfer$bias[1], transfer$bias[2]))
+  log_warn("That is the signature of a model with no transferable ",
+           "relationship: trained on one stratum it drags the other toward ",
+           "its own mean, over-predicting the low stratum and under-")
+  log_warn("predicting the high one. The covariate is standing in for the ",
+           "peat/mineral split, not for a carbon gradient that generalises.")
+}
 
 # In-sample fit, shown only to quantify the gap against cross-validated skill.
 insample <- fit_ols(best_x, y)
@@ -228,20 +285,23 @@ if (length(embed_cols) >= 8L) {
 
 log_step("06f  VERDICT: DOES PRODUCT 3 EARN A MAP?")
 
-beats_null   <- loco$metrics$skill_null > 0
-transfers    <- isTRUE(loso$metrics$skill_null > 0)
-recommend    <- beats_null && transfers
+has_skill    <- loco$metrics$r2_cv > 0        # the governing test
+beats_lfl    <- skill_lfl > 0                 # like-for-like, reported alongside
+transfers    <- isTRUE(loso$metrics$r2_cv > 0)
+recommend    <- has_skill && transfers
 
 verdict <- data.frame(
-  criterion = c("beats mean-only null under leave-one-core-out",
-                "transfers across strata (leave-one-stratum-out)",
+  criterion = c("cross-validated predictions beat the observed mean (r2_cv > 0)",
+                "lowers RMSE against a like-for-like cross-validated null",
+                "transfers across strata (leave-one-stratum-out r2_cv > 0)",
                 "n cores",
                 "candidates screened",
                 "RECOMMENDED FOR MAPPING"),
-  value = c(sprintf("%s (skill %+.3f)", ifelse(beats_null, "YES", "NO"),
-                    loco$metrics$skill_null),
-            sprintf("%s (skill %+.3f)", ifelse(transfers, "YES", "NO"),
-                    loso$metrics$skill_null),
+  value = c(sprintf("%s (r2_cv %+.3f)", ifelse(has_skill, "YES", "NO"),
+                    loco$metrics$r2_cv),
+            sprintf("%s (skill %+.3f)", ifelse(beats_lfl, "YES", "NO"), skill_lfl),
+            sprintf("%s (r2_cv %+.3f)", ifelse(transfers, "YES", "NO"),
+                    loso$metrics$r2_cv),
             as.character(nrow(dat)),
             as.character(n_cand),
             ifelse(recommend, "YES", "NO")),
@@ -252,9 +312,11 @@ print_table(verdict)
 log_warn(strrep("-", 68))
 if (!recommend) {
   log_warn("PRODUCT 3 IS NOT RECOMMENDED FOR MAPPING.")
-  log_warn("  The covariate model does not beat a mean-only null under")
-  log_warn("  core-level cross-validation, and/or does not transfer between")
-  log_warn("  strata. No prediction raster is written.")
+  log_warn(sprintf("  Cross-validated r2 is %+.3f: the predictions are worse",
+                   loco$metrics$r2_cv))
+  log_warn("  than simply using the observed mean. Leave-one-stratum-out ",
+           sprintf("r2 is %+.3f.", loso$metrics$r2_cv))
+  log_warn("  No prediction raster is written.")
   log_warn("")
   log_warn("  This is the expected outcome and it is a result, not a failure")
   log_warn("  of the pipeline. Eight cores in two clusters cannot identify a")
@@ -286,8 +348,15 @@ cv_out <- rbind(
   cbind(model = paste0("ols:", best$covariate), cv = "leave-one-core-out",   loco$metrics),
   cbind(model = paste0("ols:", best$covariate), cv = "leave-one-stratum-out", loso$metrics)
 )
+# skill_null compares against the in-sample mean; skill_vs_cv_null compares the
+# model against the cross-validated null on the same footing. Both are carried
+# so a reader is never shown one without the other.
+cv_out$skill_vs_cv_null <- c(0, skill_lfl, NA_real_)
 write_csv_logged(cv_out, file.path(CFG$dir_derived, "06_model_cv.csv"),
-                 "cross-validated skill, core level only")
+                 "cross-validated skill, core level only, against both baselines")
+write_csv_logged(transfer,
+                 file.path(CFG$dir_tables, "06_stratum_transfer.csv"),
+                 "how badly the model transfers between strata")
 write_csv_logged(screen, file.path(CFG$dir_tables, "06_covariate_screening.csv"),
                  "full ranking, so selection optimism stays visible")
 write_csv_logged(verdict, file.path(CFG$dir_tables, "06_model_verdict.csv"),

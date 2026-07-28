@@ -235,6 +235,54 @@ ok(cv_core$n_folds == 2 && cv_seg$n_folds == 6,
    "fold counts follow the grouping unit")
 
 # =============================================================================
+section("fit_ols degeneracy handling")
+# =============================================================================
+# A covariate that is constant within the training fold makes the design matrix
+# rank-deficient. R would return a fit and predict() would warn about "doubtful
+# cases" while still handing back a number. fit_ols must drop the column.
+xc <- data.frame(const = rep(2, 5), good = c(1, 2, 3, 4, 5))
+yc <- c(2, 4, 6, 8, 10)
+mc <- fit_ols(xc, yc)
+ok(identical(attr(mc, "dropped_constant"), "const"),
+   "drops a constant predictor and records which one")
+eq(as.numeric(predict_ols(mc, xc)), yc,
+   "still fits perfectly on the informative predictor")
+
+# Every predictor constant: nothing usable is left.
+xd <- data.frame(a = rep(1, 4), b = rep(9, 4))
+yd <- c(1, 2, 3, 4)
+md <- fit_ols(xd, yd)
+ok(inherits(md, "ols_degenerate"), "falls back to intercept-only when nothing varies")
+eq(as.numeric(predict_ols(md, xd)), rep(mean(yd), 4),
+   "degenerate model predicts the training mean")
+
+# The whole point: no warning escapes to the user.
+wr <- withCallingHandlers({
+  invisible(predict_ols(fit_ols(xc, yc), xc)); "clean"
+}, warning = function(w) { "warned" })
+ok(wr == "clean", "no rank-deficiency warning reaches the caller")
+
+# And it survives a real leave-one-out loop where a fold goes constant.
+xe <- data.frame(v = c(5, 5, 5, 5, 1, 2))   # constant in most LOO folds
+ye <- c(1, 2, 3, 4, 5, 6)
+ge <- as.character(1:6)
+cve <- withCallingHandlers(
+  cv_leave_one_group_out(xe, ye, ge, fit_ols, predict_ols),
+  warning = function(w) { .fail <<- .fail + 1L; invokeRestart("muffleWarning") })
+ok(all(is.finite(cve$predictions$pred)), "every fold still returns a prediction")
+
+# =============================================================================
+section("skill_vs_reference")
+# =============================================================================
+o <- c(1, 2, 3, 4)
+ok(abs(skill_vs_reference(o, o, rep(mean(o), 4)) - 1) < 1e-12,
+   "perfect prediction has skill 1 against any reference")
+eq(skill_vs_reference(o, rep(mean(o), 4), rep(mean(o), 4)), 0,
+   "identical predictions have zero skill against each other")
+ok(skill_vs_reference(o, c(4, 3, 2, 1), rep(mean(o), 4)) < 0,
+   "a worse-than-reference prediction has negative skill")
+
+# =============================================================================
 section("boot_mean_ci determinism")
 # =============================================================================
 a <- boot_mean_ci(c(1, 2, 3, 4, 5), B = 500, seed = 42)
