@@ -10,7 +10,15 @@ support a careful accounting of what the cores measure and a stratified
 estimate with honest uncertainty. Both are produced. A prediction map is
 attempted, tested against a null model, and released only if it passes.
 
-Full findings: **[`outputs/REPORT.md`](outputs/REPORT.md)**.
+Full findings: **[`outputs/REPORT.qmd`](outputs/REPORT.qmd)** (technical) and
+**[`outputs/COMMUNITY_REPORT.qmd`](outputs/COMMUNITY_REPORT.qmd)** (plain
+language). Both are Quarto documents with **no executable code chunks** —
+every number is computed by the R scripts and written in as finished text — so
+they render with the Quarto CLI alone:
+
+```bash
+quarto render outputs/COMMUNITY_REPORT.qmd    # no knitr, no R packages needed
+```
 Community-facing summary and shareable figures: **[`outputs/COMMUNITY_BRIEF.md`](outputs/COMMUNITY_BRIEF.md)** and `outputs/figures/community_*.png`.
 
 ---
@@ -18,13 +26,13 @@ Community-facing summary and shareable figures: **[`outputs/COMMUNITY_BRIEF.md`]
 ## Quick start
 
 ```bash
-Rscript run_all.R               # 01, 02, 05, 09, 07, 08, 10 — base R only
+Rscript run_all.R               # 01,02,05,09 → 07,08,10,11,12 — base R only
 Rscript run_all.R --gee         # adds 03, 04, 06     — needs rgee + EE auth
-Rscript tests/test_functions.R  # 109 unit tests
-Rscript tests/test_pipeline.R   # 63 integration tests
+Rscript tests/test_functions.R  # 159 unit tests
+Rscript tests/test_pipeline.R   # 108 integration tests
 ```
 
-**Scripts 01, 02, 05, 07, 08, 09 and 10 require no R packages at all** — not even
+**Scripts 01, 02, 05 and 07–12 require no R packages at all** — not even
 for spatial output. That is deliberate: the scientifically load-bearing steps —
 quality control, stock computation, stratified estimation, the validation
 ledger, and the GeoTIFFs — should run on any R installation without a
@@ -54,6 +62,43 @@ km². The rest is NoData because nothing in the dataset constrains it. That
 number is the argument for the next field season rather than for a better
 interpolator.
 
+## Bayesian maps (PRODUCT 4)
+
+`11_bayesian_map.R` treats a published carbon map as the **prior** and the
+cores as **observations**, in a conjugate Gaussian update (`R/bayes.R`). A
+core's pull on a pixel fades with distance (Gaussian kernel, length scale =
+median core spacing, truncated at 7.5 km) and precisions add across cores, so
+sample size enters automatically. Outputs: posterior mean, sd,
+`core_info_fraction` (the share of the answer coming from cores rather than the
+prior — the most honest layer in the set) and `shift_from_prior`.
+
+**Depth is handled explicitly, because Li et al. is full peat-column carbon
+(~86 kg/m² over ~184 cm) and the cores are 0–30 cm (3–14 kg/m²).** Those differ
+~6× because they measure different things. So the column is split into its top
+30 cm and everything below, only the top is updated, and the deep part is added
+back untouched. The split fraction is the single largest assumption and is
+configurable, reported, and varied in sensitivity.
+
+**The headline result is not the map update — it is a corroboration.** The
+cores move the full-column prior by at most 0.21%, which is correct: 30 cm is a
+small slice of a metres-deep column. But a measured 0–30 cm stock of
+10.02 kg C/m² against Li's 86 kg C/m² implies **11.6%** of the column sits in
+the top 30 cm, against **16.3%** under uniform density. Peat compacts with
+depth, so *less* than proportional is exactly what physics predicts — and these
+cores show bulk density rising 4.6× from surface to 30 cm. **The community
+measurement independently corroborates the published regional map at this
+site.**
+
+### Peat depth: a substantive field finding
+
+Detecting the peat/mineral contact from the organic-matter profile gives peat
+depths of **15.2 cm (PM-02-A)** and **25.2 cm (PM-03-A)**, with PM-01-A still
+in peat at 14.5 cm. Against a regional mean of 184 ± 48 cm, these are **peat
+margins or shallow fen, not the deep peat plateaus** that hold most of the
+region's carbon — which is both a limit on what these cores can say about a
+full-column product and a useful conservation finding in its own right, since
+thin peat is the vulnerable kind.
+
 ---
 
 ## Layout
@@ -67,6 +112,8 @@ R/
   qc.R                        hard gates and value flags (pure predicates)
   depth.R                     depth semantics and window integration (pure)
   stats.R                     bootstrap, cross-validation, variogram diagnostic (pure)
+  bayes.R                     conjugate Bayesian update, kernels, depth splitting (pure)
+  geotiff.R                   base-R GeoTIFF and GeoJSON writers (no GDAL)
 scripts/
   01_ingest_qc.R              read, recompute from first principles, reconcile, flag
   02_depth_harmonise.R        like-for-like depth windows, stocks, lower-bound flags
@@ -75,8 +122,11 @@ scripts/
   05_stratified_estimate.R    PRODUCT 1 and 2; the case against kriging
   06_covariate_model.R        PRODUCT 3 + honest cross-validation        [needs GEE]
   07_validation_ledger.R      what is validated, what is not, where leakage was possible
-  08_report.R                 assembles outputs/REPORT.md
-  10_community_figures.R      creates shareable PNG figures + COMMUNITY_BRIEF.md
+  08_report.R                 assembles outputs/REPORT.qmd (technical)
+  09_spatial_products.R       GeoTIFFs + GeoJSON, no GDAL required
+  10_community_figures.R      shareable PNG figures + COMMUNITY_BRIEF.md
+  11_bayesian_map.R           PRODUCT 4: published map as prior, cores as data
+  12_community_report.R       plain-language outputs/COMMUNITY_REPORT.qmd
 tests/                        unit + integration tests
 data/raw/                     the 22-row core CSV, verbatim headers
 data/derived/                 script outputs
