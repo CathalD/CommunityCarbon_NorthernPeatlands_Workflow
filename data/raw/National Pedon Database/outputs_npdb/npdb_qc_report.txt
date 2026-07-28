@@ -1,0 +1,17 @@
+QC REPORT - prep_npdb_carbon.R
+Generated: 2026-07-27 20:43:25.4711
+Depth datum: profile_top | standard depth: 30 cm
+
+Read NPDB: Info=9301, Profiles=6073, Horizons=48371, Chemical=39650, Physical=31014 rows.
+Chemical layers with NO horizon record (dropped, no depth): 74.
+Physical layers with NO horizon record (dropped, no depth): 71.
+Samples (horizons): 48371. Stock-computable (carbon & BD & thickness): 2600 (5.4%), across 830 pedons.
+Bulk density is the binding constraint: 28596 samples have carbon but 44824 lack BD.
+Bulk density < 0.05 g/cm3 (flagged, kept): 9 samples.
+Depth datum for standardisation = 'profile_top' (standard depth = 30 cm).
+Cores (pedons): 9017. With >=1 computable sample: 830. With ALL horizons carrying BD: 240.
+Cores flagged for coarse location (CONF_METRS > 1000 m): 1564.
+
+REMINDER: bulk density is sparse in NPDB; stock is computed only where
+BD is measured. To extend coverage, add a bulk-density pedotransfer
+function as an explicit, flagged step - do not impute silently.
