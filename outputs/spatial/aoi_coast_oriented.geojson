@@ -1,0 +1,7 @@
+{
+  "type": "FeatureCollection",
+  "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:OGC:1.3:CRS84"}},
+  "features": [
+    {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [[[-88.31701849, 56.27887515], [-87.50568197, 55.67985742], [-87.08209871, 55.85862013], [-87.89343523, 56.45763786], [-88.31701849, 56.27887515]]]}, "properties": {"name": "Fort Severn coast-oriented AOI", "bearing_deg": 142.91, "length_km": 83.6, "width_km": 33, "area_km2": 2758.4, "along_buffer_km": 30, "across_buffer_km": 12, "orientation_source": "derived from core principal axis", "crs": "EPSG:4326"}}
+  ]
+}

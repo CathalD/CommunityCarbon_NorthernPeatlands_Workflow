@@ -538,6 +538,90 @@ eq(uniform_shallow_fraction(30, 184), 30 / 184,
 ok(uniform_shallow_fraction(30, 20) < 1,
    "fraction is capped below 1 when peat is shallower than the window")
 
+# =============================================================================
+section("oriented AOI geometry")
+# =============================================================================
+# Points along a known bearing must recover that bearing.
+b <- 45
+d <- seq(-10, 10, 2) * 1000
+lat0 <- 56; lon0 <- -87.7
+th <- (90 - b) * pi / 180
+xx <- d * cos(th); yy <- d * sin(th)
+lo <- lon0 + xx / (111320 * cos(lat0 * pi / 180)); la <- lat0 + yy / 111320
+pa <- principal_axis_bearing(lo, la)
+ok(abs(pa$bearing_deg - b) < 1, "recovers a known 45 degree bearing")
+ok(pa$var_explained > 0.99, "collinear points put all variance on axis 1")
+
+# A square must be built in METRES, not degrees: at 56 N one degree of
+# longitude is only 0.56 of a degree of latitude on the ground, so a
+# degree-square is a north-south rectangle and would fail for the wrong reason.
+sq_m <- 10000
+sq_lon <- lon0 + c(-1, 1, -1, 1) * sq_m / (111320 * cos(lat0 * pi / 180))
+sq_lat <- lat0 + c(-1, -1, 1, 1) * sq_m / 111320
+pa2 <- principal_axis_bearing(sq_lon, sq_lat)
+ok(pa2$var_explained < 0.75, "a square arrangement (in metres) has no dominant axis")
+
+rect <- oriented_rectangle(lo, la, b, along_buffer_km = 5, across_buffer_km = 2)
+ok(all(point_in_oriented_rect(lo, la, rect)),
+   "every input point falls inside the rectangle")
+ok(abs(rect$width_km - 4) < 0.2, "width is twice the across-buffer for collinear points")
+ok(abs(rect$length_km - 30) < 0.5, "length is the span plus both along-buffers")
+ok(length(rect$lon) == 5 && rect$lon[1] == rect$lon[5],
+   "polygon ring is closed")
+ok(rect$area_km2 > 0, "area is positive")
+
+# A point far outside must be rejected.
+ok(!point_in_oriented_rect(-80, 56, rect), "a distant point is outside")
+# A point displaced perpendicular to the axis beyond the 2 km across-buffer
+# must be outside. Build it by inverting the rotation used in the module:
+#   x = u cos(th) - v sin(th),  y = u sin(th) + v cos(th)
+across_m <- 5000                     # well beyond the 2 km buffer
+fx <- -across_m * sin(rect$theta)
+fy <-  across_m * cos(rect$theta)
+far <- .from_local(fx, fy, rect$lon0, rect$lat0)
+ok(!point_in_oriented_rect(far$lon, far$lat, rect),
+   "a point beyond the across-buffer is outside")
+# ...and one just inside it must be inside, so the test is not passing trivially.
+near_m <- 1000
+nx <- -near_m * sin(rect$theta); ny <- near_m * cos(rect$theta)
+nr <- .from_local(nx, ny, rect$lon0, rect$lat0)
+ok(point_in_oriented_rect(nr$lon, nr$lat, rect),
+   "a point within the across-buffer is inside")
+
+oc <- oriented_coordinates(lo, la, rect)
+ok(nrow(oc) == length(lo), "coordinates returned for every point")
+ok(all(abs(oc$across_km) < 0.5), "collinear points have ~zero across-axis spread")
+ok(abs(diff(range(oc$along_km)) - 20) < 0.5, "along-axis span matches the input")
+
+# Envelope must contain the oriented rectangle.
+ok(rect$bbox[["xmin"]] <= min(rect$lon) && rect$bbox[["xmax"]] >= max(rect$lon),
+   "bbox envelopes the polygon in longitude")
+ok(rect$bbox[["ymin"]] <= min(rect$lat) && rect$bbox[["ymax"]] >= max(rect$lat),
+   "bbox envelopes the polygon in latitude")
+
+sn <- ee_polygon_snippet(rect, "aoi")
+ok(grepl("ee\\.Geometry\\.Polygon", sn), "emits an Earth Engine polygon literal")
+ok(lengths(regmatches(sn, gregexpr("\\[-?[0-9]", sn))) >= 5,
+   "snippet carries all vertices")
+
+gp <- tempfile(fileext = ".geojson")
+write_geojson_polygon(rect$lon, rect$lat, gp, props = list(name = "test"))
+gt <- paste(readLines(gp), collapse = "")
+ok(grepl('"Polygon"', gt), "writes a GeoJSON polygon")
+ok(grepl('"name": "test"', gt), "carries properties")
+unlink(gp)
+
+# =============================================================================
+section("isTRUE_vec")
+# =============================================================================
+ok(identical(isTRUE_vec(c(TRUE, FALSE, NA)), c(TRUE, FALSE, FALSE)),
+   "logical vector with NA treated as FALSE")
+ok(identical(isTRUE_vec(c("TRUE", "true", "False", "")),
+             c(TRUE, TRUE, FALSE, FALSE)),
+   "character TRUE/true recognised, others FALSE")
+ok(length(isTRUE_vec(c(TRUE, TRUE))) == 2,
+   "returns one value per element, unlike isTRUE()")
+
 # ---- summary -----------------------------------------------------------------
 cat("\n", strrep("=", 60), "\n", sep = "")
 cat(sprintf("passed %d   failed %d\n", .pass, .fail))

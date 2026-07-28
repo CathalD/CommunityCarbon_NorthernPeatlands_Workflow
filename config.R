@@ -250,6 +250,50 @@ CFG <- local({
       export_crs       = "EPSG:3979"
     ),
 
+    # ---- oriented AOI (script 13) -----------------------------------------
+    # An axis-aligned box fits a coastal study area badly. The Hudson Bay
+    # shoreline at Fort Severn runs NW-SE and the sampling follows it, so the
+    # AOI is a rectangle aligned to that trend with a generous buffer.
+    aoi_oriented = list(
+      # NULL means "derive the bearing from the cores' principal axis", which
+      # for a shoreline-following transect recovers the shoreline trend.
+      # Override with a number (degrees from north) to set it by hand.
+      bearing_deg = NULL,
+      along_buffer_km  = 30,   # beyond the cores at EACH end of the long axis
+      across_buffer_km = 12,   # beyond the cores on EACH side
+      # Below this share of variance on the first principal component the
+      # cores are too blob-like for an oriented rectangle to mean anything,
+      # and 13 falls back to an axis-aligned box rather than inventing a trend.
+      min_var_explained = 0.60
+    ),
+
+    # ---- National Pedon Database (script 14) ------------------------------
+    npdb = list(
+      dir = "data/raw/National Pedon Database/outputs_npdb",
+      file_cores   = "npdb_carbon_cores.csv",
+      file_samples = "npdb_carbon_samples.csv",
+      # NPDB stocks are Mg C/ha. This workflow reports kg C/m2 throughout.
+      # 1 kg/m2 = 10 Mg/ha, so Mg/ha / 10 = kg/m2. Applied explicitly in 14
+      # and checked against a plausible range rather than assumed.
+      mgha_to_kgm2 = 0.1,
+      # Cores whose recorded position is worse than this are flagged: at
+      # coarse location a core cannot be attributed to a landscape unit.
+      max_location_conf_m = 1000,
+      # Comparison rings around Fort Severn, km.
+      context_radii_km = c(500, 1000, 2000)
+    ),
+
+    # ---- landscape clustering (script 16) ---------------------------------
+    # k-means on the AlphaEarth embedding. Unsupervised, so unlike the
+    # predictive model in 06 this is NOT constrained by having eight cores:
+    # nothing about carbon enters the fit, and the sample size that matters is
+    # the pixel count.
+    clusters = list(
+      k_values = c(3L, 4L, 5L, 6L, 8L, 10L),  # range explored and reported
+      k_final  = 6L,                          # k used for the reported product
+      n_training_pixels = 5000L
+    ),
+
     # ---- Bayesian map (script 11) -----------------------------------------
     # A published carbon map is the PRIOR; the community cores are the
     # observations. See R/bayes.R for the model. Nothing here is fitted from
