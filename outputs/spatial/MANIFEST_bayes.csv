@@ -1,0 +1,5 @@
+"file","units","meaning","depth_support","prior_mode"
+"DEMO_BAYES_fullcolumn_mean_kgm2.tif","kg C/m2","posterior mean full peat column carbon","FULL PEAT COLUMN -- never compare with a 0-30 cm layer","REGIONAL"
+"DEMO_BAYES_fullcolumn_sd_kgm2.tif","kg C/m2","posterior standard deviation","FULL PEAT COLUMN -- never compare with a 0-30 cm layer","REGIONAL"
+"DEMO_BAYES_fullcolumn_core_info_fraction.tif","fraction 0-1","share of the answer coming from the cores rather than the prior","FULL PEAT COLUMN -- never compare with a 0-30 cm layer","REGIONAL"
+"DEMO_BAYES_fullcolumn_shift_from_prior_kgm2.tif","kg C/m2","how far the cores moved the published value","FULL PEAT COLUMN -- never compare with a 0-30 cm layer","REGIONAL"

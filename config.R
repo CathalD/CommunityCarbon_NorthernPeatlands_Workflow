@@ -250,6 +250,41 @@ CFG <- local({
       export_crs       = "EPSG:3979"
     ),
 
+    # ---- Bayesian map (script 11) -----------------------------------------
+    # A published carbon map is the PRIOR; the community cores are the
+    # observations. See R/bayes.R for the model. Nothing here is fitted from
+    # the data -- every value is a stated choice, so that the weighting is
+    # auditable rather than inferred from eight points.
+    bayes = list(
+      # Distance kernel. The length scale defaults to the median core-to-core
+      # spacing, derived from the data in 09 (2.51 km): the scale at which this
+      # sampling design resolves anything at all. NULL means "derive it".
+      length_scale_km = NULL,
+      # Beyond this, a core's weight is set to exactly zero. Without a hard
+      # cut-off the map looks informed everywhere, which it is not.
+      max_influence_km = 7.5,
+      # Sensitivity length scales, reported alongside the default.
+      sensitivity_length_scales_km = c(1, 2.5, 5, 10),
+
+      # A mineral core carries no information about a peat pixel. Gating
+      # requires a stratum raster; without one the maps are produced per
+      # stratum instead, for the analyst to combine against their own layer.
+      stratum_gating = TRUE,
+
+      # Share of FULL-COLUMN peat carbon lying in the top 30 cm. Needed only
+      # for the Li-prior product, and unavoidable when updating a full-column
+      # prior with 30 cm cores. Under uniform density this would be
+      # 30/184 = 0.163, but peat compacts: these cores show bulk density rising
+      # more than fourfold from the surface to 30 cm, so the top of the column
+      # holds LESS than its proportional share. 0.12 is a considered default
+      # between the uniform value and the compaction-adjusted end of the range.
+      shallow_fraction_of_column = 0.12,
+      shallow_fraction_sensitivity = c(0.08, 0.12, 0.163),
+
+      # Organic-matter threshold defining peat, for peat-depth detection.
+      om_peat_threshold_pct = 30
+    ),
+
     # ---- published values used as AUDIT TARGETS ---------------------------
     # These are not inputs to any estimate. 04 checks each reference layer's
     # measured statistics against them, so that a mis-specified asset (wrong

@@ -157,6 +157,58 @@ integrate_window <- function(depth_top_cm, depth_bottom_cm, carbon_density_gcm3,
   )
 }
 
+#' Locate the peat/mineral contact in a core from its organic-matter profile.
+#'
+#' Peat is conventionally defined by organic-matter content: material above a
+#' threshold (commonly 30 % OM, roughly 17 % organic carbon) is peat, below it
+#' is mineral soil. The depth at which a profile crosses that threshold is the
+#' peat depth, and it is the single most important number for comparing these
+#' cores against a full-peat-column product.
+#'
+#' Three outcomes are distinguished, and the distinction matters:
+#'   "contact_observed" the core crossed the threshold; peat depth is measured.
+#'   "still_peat"       the core ended while still in peat; peat depth is a
+#'                      LOWER BOUND, the true contact is deeper.
+#'   "no_peat"          the core never met the threshold at all.
+#'
+#' The contact is placed at the top of the first sub-threshold segment, which
+#' is the shallowest depth consistent with the observation. Pure.
+detect_peat_depth <- function(depth_top_cm, depth_bottom_cm, om_pct,
+                              om_threshold = 30) {
+  o <- order(depth_top_cm)
+  top <- depth_top_cm[o]; bot <- depth_bottom_cm[o]; om <- om_pct[o]
+
+  is_peat <- om >= om_threshold
+  if (!any(is_peat)) {
+    return(data.frame(peat_depth_cm = 0, status = "no_peat",
+                      is_lower_bound = FALSE,
+                      core_bottom_cm = max(bot), stringsAsFactors = FALSE))
+  }
+  first_mineral <- which(!is_peat & seq_along(is_peat) > which(is_peat)[1])
+  if (length(first_mineral)) {
+    data.frame(peat_depth_cm = top[first_mineral[1]],
+               status = "contact_observed", is_lower_bound = FALSE,
+               core_bottom_cm = max(bot), stringsAsFactors = FALSE)
+  } else {
+    data.frame(peat_depth_cm = max(bot), status = "still_peat",
+               is_lower_bound = TRUE,
+               core_bottom_cm = max(bot), stringsAsFactors = FALSE)
+  }
+}
+
+#' Apply detect_peat_depth() to every core. Pure.
+detect_peat_depth_all <- function(seg, om_threshold = 30) {
+  ids <- unique(seg$core_id)
+  out <- do.call(rbind, lapply(ids, function(cc) {
+    s <- seg[seg$core_id == cc, , drop = FALSE]
+    cbind(data.frame(core_id = cc, stringsAsFactors = FALSE),
+          detect_peat_depth(s$depth_top_cm, s$depth_bottom_cm, s$om_pct,
+                            om_threshold))
+  }))
+  rownames(out) <- NULL
+  out
+}
+
 #' Deepest window, starting at the surface, that EVERY core fully covers.
 #'
 #' This is the only depth interval over which all cores are directly

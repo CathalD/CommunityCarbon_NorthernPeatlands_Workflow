@@ -244,6 +244,96 @@ ok("RECOMMENDED FOR MAPPING" %in% vd$criterion, "the verdict is explicit")
 ok(vd$value[vd$criterion == "RECOMMENDED FOR MAPPING"] == "NO",
    "random covariates do NOT earn a map (the guard works)")
 
+# =============================================================================
+section("11 Bayesian maps")
+# =============================================================================
+r11 <- run("11_bayesian_map.R")
+ok(is.null(r11$status), "11 exits cleanly")
+ok(grepl("THE PEAT CORES SIT ON THIN PEAT", r11$out),
+   "11 reports that the peat cores sit on thin peat")
+ok(grepl("REGIONAL", r11$out), "11 names its prior mode")
+
+pdp <- read.csv(tables("11_peat_depth_at_cores.csv"))
+ok(nrow(pdp) == 8, "peat depth is reported for every core")
+ok(all(pdp$peat_depth_cm[grepl("^FS", pdp$core_id)] == 0),
+   "mineral cores are given zero peat depth")
+ok(pdp$status[pdp$core_id == "PM-02-A"] == "contact_observed",
+   "PM-02-A's peat/mineral contact is detected")
+ok(pdp$is_lower_bound[pdp$core_id == "PM-01-A"],
+   "a core still in peat at its base is a lower bound on peat depth")
+ok(all(pdp$peat_depth_cm[pdp$status != "no_peat"] < 60),
+   "observed peat depths are far below the 184 cm regional mean")
+
+bt <- function(f) file.path(sandbox, "outputs", "spatial", f)
+for (f in c("DEMO_BAYES_fullcolumn_mean_kgm2.tif",
+            "DEMO_BAYES_fullcolumn_sd_kgm2.tif",
+            "DEMO_BAYES_fullcolumn_core_info_fraction.tif",
+            "DEMO_BAYES_fullcolumn_shift_from_prior_kgm2.tif")) {
+  ok(file.exists(bt(f)), paste("11 writes", f))
+  h <- readBin(bt(f), "raw", n = 8)
+  ok(rawToChar(h[1:2]) == "II" &&
+       readBin(h[3:4], "integer", size = 2, endian = "little",
+               signed = FALSE) == 42L,
+     paste(f, "is a valid TIFF"))
+}
+ok(grepl("^DEMO_", "DEMO_BAYES_fullcolumn_mean_kgm2.tif"),
+   "regional-mode outputs are prefixed DEMO_ so they cannot be mistaken for the Li map")
+
+isf <- read.csv(tables("11_implied_shallow_fraction.csv"))
+ok(isf$implied_shallow_fraction < isf$uniform_density_fraction,
+   "cores imply a smaller top-30cm share than uniform density (compaction)")
+ok(isf$implied_shallow_fraction > 0 && isf$implied_shallow_fraction < 1,
+   "implied fraction is a proper fraction")
+
+man_b <- read.csv(bt("MANIFEST_bayes.csv"))
+ok(all(grepl("FULL PEAT COLUMN", man_b$depth_support)),
+   "every full-column raster is labelled with its depth support")
+
+# =============================================================================
+section("Quarto reports")
+# =============================================================================
+r7 <- run("07_validation_ledger.R")
+ok(is.null(r7$status), "07 exits cleanly")
+r8 <- run("08_report.R")
+ok(is.null(r8$status), "08 exits cleanly")
+r12 <- run("12_community_report.R")
+ok(is.null(r12$status), "12 exits cleanly")
+
+for (f in c("REPORT.qmd", "COMMUNITY_REPORT.qmd")) {
+  p <- file.path(sandbox, "outputs", f)
+  ok(file.exists(p), paste("writes", f))
+  txt <- readLines(p, warn = FALSE)
+  ok(txt[1] == "---", paste(f, "starts with YAML front matter"))
+  close_at <- which(txt == "---")[2]
+  ok(!is.na(close_at) && close_at > 1, paste(f, "front matter is closed"))
+  fm <- txt[2:(close_at - 1)]
+  ok(any(grepl("^title:", fm)), paste(f, "declares a title"))
+  ok(any(grepl("^format:", fm)), paste(f, "declares output formats"))
+  # Balanced Quarto callout fences.
+  body <- txt[(close_at + 1):length(txt)]
+  ok(sum(grepl("^::: \\{", body)) == sum(grepl("^:::\\s*$", body)),
+     paste(f, "has balanced callout fences"))
+  # No live code chunks: the report must render with the Quarto CLI alone.
+  ok(!any(grepl("^```\\{r", body)),
+     paste(f, "contains no executable chunks (renders without knitr)"))
+}
+
+cr <- paste(readLines(file.path(sandbox, "outputs", "COMMUNITY_REPORT.qmd"),
+                      warn = FALSE), collapse = "\n")
+ok(grepl("kg C/m", cr), "community report states its units")
+ok(grepl("Bayesian update", cr), "community report explains the Bayesian idea")
+ok(grepl("lower bound|LOWER BOUND|AT LEAST", cr),
+   "community report carries the lower-bound caveat through to plain language")
+ok(grepl("not a map of its carbon", cr),
+   "community report keeps the shallow-map warning")
+for (g in regmatches(cr, gregexpr("figures/[A-Za-z0-9_]+\\.png", cr))[[1]]) {
+  ok(file.exists(file.path(sandbox, "outputs", g)),
+     paste("figure resolves:", g))
+}
+
+ok(!file.exists(file.path(sandbox, "outputs", "REPORT.md")),
+   "the superseded Markdown report is removed, so two versions cannot drift")
+
 # ---- summary -----------------------------------------------------------------
 cat("\n", strrep("=", 60), "\n", sep = "")
 cat(sprintf("passed %d   failed %d\n", .pass, .fail))

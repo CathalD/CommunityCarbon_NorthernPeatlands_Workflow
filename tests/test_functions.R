@@ -405,6 +405,139 @@ ok(lengths(regmatches(tb, gregexpr("\\[-88\\.05", tb))) >= 2,
    "polygon ring is closed (first vertex repeats)")
 unlink(gb)
 
+# =============================================================================
+section("detect_peat_depth")
+# =============================================================================
+d <- detect_peat_depth(c(0, 15.2), c(15.2, 20.7), c(39.1, 2.71))
+eq(d$peat_depth_cm, 15.2, "contact placed at the top of the first mineral segment")
+ok(d$status == "contact_observed", "observed contact is reported as such")
+ok(!d$is_lower_bound, "an observed contact is not a lower bound")
+
+d <- detect_peat_depth(0, 14.5, 39.1)
+eq(d$peat_depth_cm, 14.5, "core ending in peat gives the core bottom")
+ok(d$status == "still_peat" && d$is_lower_bound,
+   "core ending in peat is flagged as a LOWER BOUND on peat depth")
+
+d <- detect_peat_depth(c(0, 10), c(10, 20), c(5, 3))
+ok(d$status == "no_peat" && d$peat_depth_cm == 0,
+   "a wholly mineral core has zero peat depth")
+
+# =============================================================================
+section("kernel functions")
+# =============================================================================
+eq(kernel_gaussian(0, 2.5), 1, "weight is 1 at zero distance")
+eq(kernel_gaussian(2.5, 2.5), exp(-0.5), "weight is exp(-1/2) at the length scale")
+ok(kernel_gaussian(10, 2.5) < 0.001, "weight is negligible at 4 length scales")
+ok(all(diff(kernel_gaussian(seq(0, 20, 1), 2.5)) < 0), "weight decreases monotonically")
+throws(kernel_gaussian(1, 0), "rejects a non-positive length scale")
+
+w <- kernel_truncated(c(0, 2, 6, 12), 2.5, max_km = 7.5)
+ok(all(w[1:3] > 0) && w[4] == 0, "truncation zeroes weights beyond max_km")
+ok(all(w >= 0 & w <= 1), "truncated weights stay within [0, 1]")
+
+# =============================================================================
+section("bayes_posterior")
+# =============================================================================
+# With zero weight everywhere the posterior must equal the prior exactly.
+W0 <- matrix(0, 3, 2)
+p <- bayes_posterior(c(10, 20, 30), rep(5, 3), c(1, 2), c(1, 1), W0)
+eq(p$mean, c(10, 20, 30), "no core influence leaves the prior untouched")
+eq(p$sd, rep(5, 3), "no core influence leaves the prior sd untouched")
+eq(p$info_frac, rep(0, 3), "info_frac is 0 where cores have no weight")
+eq(p$shift, rep(0, 3), "shift is 0 where cores have no weight")
+
+# Full weight, equal variances: posterior mean is the midpoint.
+W1 <- matrix(1, 1, 1)
+p <- bayes_posterior(10, 1, 20, 1, W1)
+eq(p$mean, 15, "equal precisions give the midpoint of prior and observation")
+eq(p$sd, 1 / sqrt(2), "two equal precisions halve the variance")
+eq(p$info_frac, 0.5, "info_frac is 0.5 when prior and data are equally precise")
+
+# A very precise observation should dominate a vague prior.
+p <- bayes_posterior(10, 100, 20, 0.01, matrix(1, 1, 1))
+ok(abs(p$mean - 20) < 1e-6, "a precise observation overrides a vague prior")
+ok(p$info_frac > 0.999, "info_frac approaches 1 when data dominate")
+
+# Sample size: n identical cores must beat one, and tighten as sqrt(n).
+p1 <- bayes_posterior(10, 1, 20, 1, matrix(1, 1, 1))
+p4 <- bayes_posterior(10, 1, rep(20, 4), rep(1, 4), matrix(1, 1, 4))
+ok(p4$mean > p1$mean, "four cores pull further from the prior than one")
+eq(p4$sd, 1 / sqrt(5), "precision adds across cores (1 prior + 4 cores)")
+ok(p4$info_frac > p1$info_frac, "info_frac rises with the number of cores")
+
+# Distance: a closer core must move the posterior further.
+near <- bayes_posterior(10, 1, 20, 1, matrix(kernel_gaussian(0.5, 2.5), 1, 1))
+far  <- bayes_posterior(10, 1, 20, 1, matrix(kernel_gaussian(8.0, 2.5), 1, 1))
+ok(near$mean > far$mean, "a nearer core moves the posterior further")
+ok(abs(far$mean - 10) < 0.1, "a distant core barely moves the posterior")
+
+# Posterior must never leave the interval spanned by prior and observations.
+set.seed(11)
+mu0 <- runif(50, 0, 100); s0 <- runif(50, 0.5, 10)
+yv  <- c(5, 60); sy <- c(2, 3)
+Wr  <- matrix(runif(100), 50, 2)
+pr  <- bayes_posterior(mu0, s0, yv, sy, Wr)
+lo <- pmin(mu0, min(yv)); hi <- pmax(mu0, max(yv))
+ok(all(pr$mean >= lo - 1e-9 & pr$mean <= hi + 1e-9),
+   "posterior mean always lies between the prior and the observations")
+ok(all(pr$sd <= s0 + 1e-9), "posterior is never less certain than the prior")
+ok(all(pr$info_frac >= 0 & pr$info_frac <= 1), "info_frac stays in [0, 1]")
+
+# A missing prior must not fabricate a value.
+p <- bayes_posterior(c(NA_real_, NA_real_), c(NA_real_, NA_real_),
+                     20, 1, matrix(c(1, 0), 2, 1))
+eq(p$mean[1], 20, "with no prior the posterior rests entirely on the cores")
+ok(is.na(p$mean[2]), "no prior and no core weight yields NA, not a number")
+ok(is.na(p$shift[1]), "shift is NA when there was no prior to shift from")
+
+throws(bayes_posterior(10, 1, 20, 0, matrix(1, 1, 1)),
+       "rejects a zero observation sd")
+throws(bayes_posterior(10, 1, 20, 1, matrix(2, 1, 1)),
+       "rejects kernel weights outside [0, 1]")
+
+# =============================================================================
+section("build_weight_matrix stratum gating")
+# =============================================================================
+D <- matrix(c(0.1, 0.1), 1, 2)            # one pixel, two very close cores
+Wg <- build_weight_matrix(D, 2.5, 10, core_stratum = c("peat", "mineral"),
+                          pixel_stratum = "peat")
+ok(Wg[1, 1] > 0.9, "a same-stratum core keeps its weight")
+eq(Wg[1, 2], 0, "a different-stratum core is gated to zero")
+
+Wu <- build_weight_matrix(D, 2.5, 10)
+ok(all(Wu > 0.9), "without gating both cores contribute")
+
+# =============================================================================
+section("core_sigma")
+# =============================================================================
+stock <- c(8.2, 5.2, 2.6, 6.9, 3.4, 3.1, 2.7, 3.5)
+strat <- rep(c("mineral", "peat"), c(5, 3))
+cs <- core_sigma(stock, strat)
+ok(all(cs$sigma_used >= cs$floor_sd - 1e-9),
+   "no core is given an sd below the pooled floor")
+ok(any(cs$floored), "the small-n peat sd is floored")
+ok(all(cs$sigma_used[strat == "mineral"] >= cs$sigma_raw[strat == "mineral"] - 1e-9),
+   "the larger mineral sd is kept as-is")
+
+# =============================================================================
+section("full-column split and recombine")
+# =============================================================================
+sp <- split_full_column(100, 0.13)
+eq(sp$shallow, 13, "shallow share is taken correctly")
+eq(sp$deep, 87, "deep remainder is the complement")
+eq(sp$shallow + sp$deep, 100, "the split conserves total carbon")
+throws(split_full_column(100, 0), "rejects a zero shallow fraction")
+throws(split_full_column(100, 1), "rejects a shallow fraction of one")
+
+rc <- recombine_full_column(15, 3, 87, 4)
+eq(rc$mean, 102, "recombination adds the layers")
+eq(rc$sd, 5, "uncertainties add in quadrature (3-4-5)")
+
+eq(uniform_shallow_fraction(30, 184), 30 / 184,
+   "uniform-density fraction is depth ratio")
+ok(uniform_shallow_fraction(30, 20) < 1,
+   "fraction is capped below 1 when peat is shallower than the window")
+
 # ---- summary -----------------------------------------------------------------
 cat("\n", strrep("=", 60), "\n", sep = "")
 cat(sprintf("passed %d   failed %d\n", .pass, .fail))

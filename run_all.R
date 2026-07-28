@@ -30,7 +30,8 @@ base_scripts <- c("01_ingest_qc.R", "02_depth_harmonise.R",
                   "05_stratified_estimate.R", "09_spatial_products.R")
 gee_scripts  <- c("03_gee_covariates.R", "04_gee_reference_audit.R",
                   "06_covariate_model.R")
-tail_scripts <- c("07_validation_ledger.R", "08_report.R", "10_community_figures.R")
+tail_scripts <- c("07_validation_ledger.R", "08_report.R", "10_community_figures.R",
+                  "11_bayesian_map.R", "12_community_report.R")
 
 plan <- if (use_gee) c(base_scripts, gee_scripts, tail_scripts) else
                      c(base_scripts, tail_scripts)
