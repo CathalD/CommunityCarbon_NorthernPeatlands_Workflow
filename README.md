@@ -28,7 +28,7 @@ Community-facing summary and shareable figures: **[`outputs/COMMUNITY_BRIEF.md`]
 ```bash
 Rscript run_all.R               # 01,02,05,09,13,14 → 07,08,10,11,12 — base R
 Rscript run_all.R --gee         # adds 03, 04, 06     — needs rgee + EE auth
-Rscript tests/test_functions.R  # 193 unit tests
+Rscript tests/test_functions.R  # 204 unit tests
 Rscript tests/test_pipeline.R   # 131 integration tests
 ```
 
@@ -89,25 +89,34 @@ cores show bulk density rising 4.6× from surface to 30 cm. **The community
 measurement independently corroborates the published regional map at this
 site.**
 
-## Earth Engine outputs go to Drive *and* local disk
+## Earth Engine rasters download straight to local disk
 
-`R/gee_io.R` exports every Earth Engine raster to Google Drive and downloads it
-to `outputs/gee/`. The Drive copy is for sharing; the local copy is what the
-reports embed, what `terra` can read, and — the part that changes the analysis
-— what `11_bayesian_map.R` looks for.
+`R/gee_io.R` fetches every Earth Engine raster over HTTPS with
+`getDownloadURL()` and writes it to `outputs/gee/`. **No Google Drive, no
+export task, no polling, no Drive auth scope.** One request either produces the
+file or says why not.
 
 **Running `04` upgrades the Bayesian maps automatically.** With no reference
 raster on disk, `11` falls back to a spatially constant regional prior and
-prefixes its outputs `DEMO_`. The downloads land under exactly the filenames
-`11` expects, so re-running it afterwards produces the real Li-prior product
-with no further action.
+prefixes its outputs `DEMO_`. Downloads land under exactly the filenames `11`
+expects, so re-running it afterwards produces the real Li-prior product.
 
-A failed download never loses work: the Drive export is started first and
-succeeds on its own, downloading is a separate recoverable step, and each
-product's fate is recorded in an export manifest (`drive_and_local`,
-`drive_only`, `drive_pending`, `cached`). Downloaded files are verified with
-`terra` — dimensions, CRS, and whether the raster is entirely NoData, which a
-successful download can still leave you with.
+The one constraint is a hard request-size ceiling (~48 MB). A single Float32
+band at 30 m over the oriented AOI is about 12 MB, so single layers are
+comfortable — but a 19-band predictor stack is not. `gee_band_chunks()`
+estimates the size up front and splits the request into band groups that fit,
+rather than discovering the limit as an opaque server error. If even one band
+is too large it writes nothing and says to coarsen the scale, instead of
+leaving a partial file that looks complete.
+
+Downloaded files are verified with `terra` — dimensions, CRS, and whether the
+raster came back entirely NoData, which a "successful" download can still
+produce when the export region misses the asset.
+
+**Export region is not the sampling region.** `03`'s AOI carries a 50 km buffer
+so compositing and point sampling have margin; that makes it ~5× the area being
+mapped, and 30 m rasters over it would exceed the ceiling. Exports therefore use
+the coast-oriented AOI from `13`.
 
 ## Coast-following AOI (script 13)
 

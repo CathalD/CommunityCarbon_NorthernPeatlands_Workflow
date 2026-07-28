@@ -55,7 +55,7 @@ if (!requireNamespace("rgee", quietly = TRUE)) {
     remedy = 'install.packages("rgee"); rgee::ee_install(); then re-run.')
 }
 suppressPackageStartupMessages(library(rgee))
-ee_Initialize(project = CFG$gee$project, drive = TRUE)
+ee_Initialize(project = CFG$gee$project)
 log_ok("Earth Engine initialised")
 
 cores <- require_artifact(file.path(CFG$dir_derived, "01_cores_qc.csv"),
@@ -189,13 +189,35 @@ if (sg_med100 < sg_med) {
 log_ok("0-100 cm exceeds 0-30 cm, as nesting requires")
 
 if (sg_med <= 0 || sg_med > CFG$ref_plausible$stock_0_30_kgm2_max) {
-  log_warn(sprintf(paste0("Constructed 0-30 cm stock (%.2f kg/m2) is outside ",
-                          "the plausible range (0, %.0f]. Suspect a scale ",
-                          "factor error."), sg_med,
+  # Before blaming the construction, check whether the arithmetic could even
+  # produce this from real soil. 30 cm of the densest plausible peat -- bulk
+  # density 0.2 g/cm3 at 50 % carbon -- yields 30 kg/m2. Reaching the observed
+  # median needs a carbon density no peat attains.
+  implied_c_density <- sg_med / (30 * 10)   # kg/m2 over 30 cm -> g C/cm3
+  log_warn(strrep("-", 68))
+  log_warn("SOILGRIDS EXCEEDS PHYSICAL PLAUSIBILITY OVER THIS AREA.")
+  log_warn(sprintf("  constructed 0-30 cm median : %.1f kg C/m2", sg_med))
+  log_warn(sprintf("  plausibility ceiling       : %.0f kg C/m2",
                    CFG$ref_plausible$stock_0_30_kgm2_max))
+  log_warn(sprintf("  implied carbon density     : %.3f g C/cm3", implied_c_density))
+  log_warn("  For comparison, 30 cm of dense peat at 0.2 g/cm3 and 50% carbon")
+  log_warn("  gives 0.10 g C/cm3, or 30 kg/m2 -- less than half this.")
+  log_warn("")
+  log_warn("  The construction itself is verified: the same formula reproduces")
+  log_warn("  the documented worked example, and the 0-100 cm sum correctly")
+  log_warn("  exceeds the 0-30 cm sum. So this is not an arithmetic error on")
+  log_warn("  our side; it is what SoilGrids reports here.")
+  log_warn("")
+  log_warn("  SoilGrids is known to model organic soils poorly, typically by")
+  log_warn("  assigning them mineral-like bulk densities. The community cores")
+  log_warn("  are the only local measurement available to test that, and the")
+  log_warn("  comparison in 07 is where it gets tested.")
+  log_warn(strrep("-", 68))
+  sg_implausible <- TRUE
 } else {
   log_ok(sprintf("constructed 0-30 cm stock is physically plausible (%.2f kg/m2)",
                  sg_med))
+  sg_implausible <- FALSE
 }
 
 sg_kgm2 <- sg_0_30
@@ -486,11 +508,26 @@ if (exists("so1_img") && !is.null(so1_img)) {
   log_ok("included Sothe 0-1 m band (barred from the 0-30 cm comparison)")
 }
 
-samp <- ref_stack$sampleRegions(collection = pts, scale = 30,
-                                geometries = FALSE, tileScale = 4)
-ref_at_cores <- sf::st_drop_geometry(ee_as_sf(samp, maxFeatures = 10000))
+# sampleRegions drops a feature ENTIRELY when any band is masked at that point,
+# so a core sitting on one masked layer disappears from every column at once.
+# The first run of this script returned six cores of eight for exactly that
+# reason. Sampling through a sentinel keeps all eight and costs only the
+# masked value.
+ref_at_cores <- gee_sample_points(ref_stack, pts, scale = 30)
 ref_at_cores <- merge(cores[, c("core_id", "campaign")], ref_at_cores,
                       by = "core_id", all.x = TRUE)
+
+n_missing <- sum(!is.finite(ref_at_cores$li2025_peat_carbon_kgm2))
+if (n_missing > 0) {
+  log_flag(n_missing, " core(s) fall on a masked pixel in at least one ",
+           "reference layer: ",
+           paste(ref_at_cores$core_id[
+             !is.finite(ref_at_cores$li2025_peat_carbon_kgm2)], collapse = ", "))
+  log_info("They are retained with NA in the affected column rather than ",
+           "dropped, so the row count still matches the core count.")
+}
+stopifnot(nrow(ref_at_cores) == nrow(cores))
+log_ok("all ", nrow(cores), " cores retained in the extraction")
 
 # Carry the audit verdict INTO the data, so a downstream reader cannot pick up
 # the Li column without also picking up the reason it is not comparable.
@@ -508,10 +545,10 @@ write_csv_logged(audit, file.path(CFG$dir_tables, "04_reference_audit.csv"),
                  "units and depth support, established by measurement")
 
 # =============================================================================
-# 7. Export the reference rasters -- to Drive AND to local disk
+# 7. Download the reference rasters to local disk
 # =============================================================================
 
-log_step("04f  REFERENCE RASTER EXPORT")
+log_step("04f  REFERENCE RASTER DOWNLOAD")
 
 # The local filenames here are not arbitrary: 11_bayesian_map.R looks for
 # exactly these. Landing them in outputs/gee/ upgrades the Bayesian products
@@ -521,25 +558,25 @@ log_info("local names are chosen so 11_bayesian_map.R picks them up ",
          "automatically and drops its DEMO_ fallback")
 
 exports <- list()
-exports[[1]] <- gee_export_image(
+exports[[1]] <- gee_download_image(
   li_kgm2$toFloat(), "ccnp_li2025_peat_carbon_30m", aoi,
-  scale = 30, crs = CFG$gee$export_crs, dir_local = CFG$dir_gee)
-exports[[2]] <- gee_export_image(
+  scale = 30, dir_local = CFG$dir_gee, crs = CFG$gee$export_crs)
+exports[[2]] <- gee_download_image(
   so_kgm2$toFloat(), "ccnp_sothe_sc_0_30_30m", aoi,
-  scale = 250, crs = CFG$gee$export_crs, dir_local = CFG$dir_gee)
-exports[[3]] <- gee_export_image(
+  scale = 250, dir_local = CFG$dir_gee, crs = CFG$gee$export_crs)
+exports[[3]] <- gee_download_image(
   sg_kgm2$toFloat(), "ccnp_soilgrids_ocs_0_30_30m", aoi,
-  scale = 250, crs = CFG$gee$export_crs, dir_local = CFG$dir_gee)
+  scale = 250, dir_local = CFG$dir_gee, crs = CFG$gee$export_crs)
 if (exists("li_unc") && !is.null(li_unc)) {
-  exports[[4]] <- gee_export_image(
+  exports[[4]] <- gee_download_image(
     li_unc$toFloat(), "ccnp_li2025_uncertainty_30m", aoi,
-    scale = 30, crs = CFG$gee$export_crs, dir_local = CFG$dir_gee)
+    scale = 30, dir_local = CFG$dir_gee, crs = CFG$gee$export_crs)
 }
 
 man <- gee_write_manifest(exports,
-                          file.path(CFG$dir_gee, "04_export_manifest.csv"))
+                          file.path(CFG$dir_gee, "04_download_manifest.csv"))
 
-if (!is.null(man) && any(man$status %in% c("drive_and_local", "cached"))) {
+if (!is.null(man) && any(man$status %in% c("local", "local_multipart", "cached"))) {
   log_ok("Reference rasters are on disk. Re-run 11_bayesian_map.R to replace ",
          "the DEMO_ outputs with real prior-based Bayesian maps.")
 }

@@ -258,7 +258,7 @@ Every figure in this report is produced by the analysis scripts in this reposito
 
 ## The maps, and what each one may be used for
 
-All maps are GeoTIFF files that open directly in ArcGIS, QGIS or Google Earth Engine. Anything built in Earth Engine is saved **both to Google Drive and to a local folder**, so it can be shared and can also be opened straight away.
+All maps are GeoTIFF files that open directly in ArcGIS, QGIS or Google Earth Engine. Everything is written to a local folder in this project (`outputs/spatial/` and `outputs/gee/`), so nothing depends on a cloud account to open.
 
 Every map carries a **status label**, and it is worth reading before using one:
 

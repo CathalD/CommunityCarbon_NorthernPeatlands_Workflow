@@ -723,9 +723,9 @@ blank()
 add("## The maps, and what each one may be used for")
 blank()
 add("All maps are GeoTIFF files that open directly in ArcGIS, QGIS or Google ",
-    "Earth Engine. Anything built in Earth Engine is saved **both to Google ",
-    "Drive and to a local folder**, so it can be shared and can also be ",
-    "opened straight away.")
+    "Earth Engine. Everything is written to a local folder in this project ",
+    "(`outputs/spatial/` and `outputs/gee/`), so nothing depends on a cloud ",
+    "account to open.")
 blank()
 add("Every map carries a **status label**, and it is worth reading before ",
     "using one:")

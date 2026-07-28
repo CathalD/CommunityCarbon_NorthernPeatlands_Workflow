@@ -662,6 +662,42 @@ ok(is.list(ec) && length(ec) == 3 && identical(ec[[1]], c(1, 4)),
    "ring converts to the nested list Earth Engine expects")
 
 # =============================================================================
+section("Earth Engine download sizing")
+# =============================================================================
+# The limit is real and was hit in practice: a 19-band predictor stack at 30 m
+# over a 50 km-buffered AOI is far past what one request can return.
+eq(gee_estimate_bytes(area_km2 = 900, scale_m = 30, n_bands = 1),
+   (900 * 1e6 / 900) * 4, "size estimate is pixels x bands x bytes")
+ok(gee_estimate_bytes(2758, 30, 1) / 1024^2 < 20,
+   "one Float32 band at 30 m over the oriented AOI is a modest download")
+ok(gee_estimate_bytes(13600, 30, 1) / 1024^2 > 32,
+   "one band over the 50 km-buffered AOI exceeds the request ceiling")
+ok(gee_estimate_bytes(2758, 30, 19) > gee_estimate_bytes(2758, 30, 1),
+   "more bands means more bytes")
+ok(gee_estimate_bytes(2758, 250, 1) < gee_estimate_bytes(2758, 30, 1),
+   "a coarser scale means fewer bytes")
+
+# Chunking must produce groups that each fit, and must lose no band.
+bands19 <- paste0("b", 1:19)
+ch <- gee_band_chunks(bands19, area_km2 = 2758, scale_m = 30)
+ok(!is.null(ch), "a 19-band stack can be chunked at 30 m over the oriented AOI")
+ok(identical(sort(unlist(ch, use.names = FALSE)), sort(bands19)),
+   "chunking preserves every band exactly once")
+ok(all(vapply(ch, function(g)
+       gee_estimate_bytes(2758, 30, length(g)) <= 32 * 1024^2, logical(1))),
+   "every chunk fits under the request ceiling")
+
+# One band too large to fit must return NULL, not an unusable chunking.
+ok(is.null(gee_band_chunks(c("a", "b"), area_km2 = 13600, scale_m = 30)),
+   "returns NULL when even a single band exceeds the ceiling")
+ok(!is.null(gee_band_chunks(c("a", "b"), area_km2 = 13600, scale_m = 250)),
+   "the same area is downloadable at a coarser scale")
+
+# A single small band should not be split.
+ok(length(gee_band_chunks("one", 2758, 30)) == 1L,
+   "a single small band is one chunk")
+
+# =============================================================================
 section("isTRUE_vec")
 # =============================================================================
 ok(identical(isTRUE_vec(c(TRUE, FALSE, NA)), c(TRUE, FALSE, FALSE)),
