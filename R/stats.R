@@ -21,23 +21,48 @@ mae  <- function(obs, pred) mean(abs(obs - pred), na.rm = TRUE)
 bias <- function(obs, pred) mean(pred - obs, na.rm = TRUE)
 
 #' Nash-Sutcliffe / CV R-squared against the observed mean.
+#'
 #' Deliberately allowed to go negative: a negative value is the honest signal
 #' that the model is worse than predicting the mean, and it must not be hidden.
+#'
+#' BOTH sums are taken over the SAME rows -- those where a prediction actually
+#' exists. Computing the error sum over predicted rows while computing the
+#' total sum over all rows manufactures skill out of missing predictions: a
+#' cross-validation fold that was skipped would shrink the numerator and leave
+#' the denominator alone, and the model would be rewarded for the fold it could
+#' not run. That is how a mean-only null model can be made to score r2 = +0.95.
 r2_cv <- function(obs, pred) {
-  sse <- sum((obs - pred)^2, na.rm = TRUE)
-  sst <- sum((obs - mean(obs, na.rm = TRUE))^2, na.rm = TRUE)
+  ok <- is.finite(obs) & is.finite(pred)
+  if (sum(ok) < 2L) return(NA_real_)
+  o <- obs[ok]; p <- pred[ok]
+  sst <- sum((o - mean(o))^2)
   if (sst == 0) return(NA_real_)
-  1 - sse / sst
+  1 - sum((o - p)^2) / sst
 }
 
 #' Skill relative to a mean-only null model. > 0 means the covariates helped.
+#'
+#' Restricted to rows with a prediction, for the same reason as r2_cv(): the
+#' null must be scored on exactly the rows the model was scored on.
 skill_vs_null <- function(obs, pred) {
-  1 - rmse(obs, pred) / rmse(obs, rep(mean(obs, na.rm = TRUE), length(obs)))
+  ok <- is.finite(obs) & is.finite(pred)
+  if (!any(ok)) return(NA_real_)
+  o <- obs[ok]; p <- pred[ok]
+  1 - rmse(o, p) / rmse(o, rep(mean(o), length(o)))
 }
 
+#' Metrics plus the accounting needed to judge them.
+#'
+#' `n_obs` and `n_predicted` are carried alongside the scores so that a metric
+#' computed from one or two surviving folds cannot be read as if it came from
+#' the whole dataset. `coverage` below 1 always means folds were skipped.
 metric_set <- function(obs, pred) {
+  n_pred <- sum(is.finite(obs) & is.finite(pred))
   data.frame(
-    n           = sum(is.finite(obs) & is.finite(pred)),
+    n           = n_pred,
+    n_obs       = sum(is.finite(obs)),
+    n_predicted = n_pred,
+    coverage    = if (sum(is.finite(obs))) n_pred / sum(is.finite(obs)) else NA_real_,
     rmse        = rmse(obs, pred),
     mae         = mae(obs, pred),
     bias        = bias(obs, pred),

@@ -198,6 +198,9 @@ R/
   gee_io.R                    Earth Engine export to Drive AND local disk
   bayes.R                     conjugate Bayesian update, kernels, depth splitting (pure)
   geotiff.R                   base-R GeoTIFF and GeoJSON writers (no GDAL)
+  proj.R                      Lambert Conformal Conic, base R, to cross-check sf
+  warp.R                      resample a lon/lat surface onto an EPSG:3978 grid
+  rf.R                        random forest (ranger when present), CV importance
 scripts/
   01_ingest_qc.R              read, recompute from first principles, reconcile, flag
   02_depth_harmonise.R        like-for-like depth windows, stocks, lower-bound flags
@@ -215,7 +218,10 @@ scripts/
   14_npdb_context.R           national context from the AAFC Pedon Database
   15_landcover_carbon.R       carbon per ecosystem type                 [needs GEE]
   16_embedding_clusters.R     k-means on AlphaEarth embeddings          [needs GEE]
+  17_package_for_community.R  STEP 1: council-ready point layers in EPSG:3978
+  18_predictive_map.R         STEP 2: five candidate surfaces, one wins [needs GEE]
 tests/                        unit + integration tests
+deliverables/                 what goes to the governing council, by step
 data/raw/                     the 22-row core CSV, verbatim headers
 data/derived/                 script outputs
 outputs/tables|figures|gee/   tables, and GEE rasters when retrieved

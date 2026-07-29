@@ -65,6 +65,10 @@ CFG <- local({
     dir_tables   = file.path(root, "outputs", "tables"),
     dir_figures  = file.path(root, "outputs", "figures"),
     dir_gee      = file.path(root, "outputs", "gee"),
+    # Everything handed to the governing council lives here and nowhere else,
+    # so a delivery can be zipped by directory rather than by remembering which
+    # files were meant to be shared.
+    dir_deliver  = file.path(root, "deliverables"),
 
     # Raw community core data. Verbatim headers, one row per sampled segment.
     file_cores_raw = file.path(root, "data", "raw", "community_soil_cores.csv"),
@@ -302,6 +306,56 @@ CFG <- local({
       k_values = c(3L, 4L, 5L, 6L, 8L, 10L),  # range explored and reported
       k_final  = 6L,                          # k used for the reported product
       n_training_pixels = 5000L
+    ),
+
+    # ---- community deliverables (scripts 17-19) ---------------------------
+    # The council asked for EPSG:3978 (NAD83 / Canada Atlas Lambert). Note this
+    # is NOT the same code as `crs_equal_area` above: 3978 and 3979 share every
+    # projection parameter and differ only in datum realisation (NAD83 versus
+    # NAD83(CSRS)). The difference is sub-metre in Canada, but the two are not
+    # interchangeable in metadata, so both are named explicitly rather than one
+    # being used for the other.
+    deliver = list(
+      epsg   = 3978L,        # deliverable CRS, as specified by the council
+      cell_m = 100L          # deliverable raster resolution, projected metres
+    ),
+
+    # ---- predictive map (script 18) ---------------------------------------
+    # Step 2 of the data-sharing plan. The settings below are STATED CHOICES,
+    # fixed before any result was seen, because with eight cores almost any
+    # tuning decision can be made to improve a validation statistic after the
+    # fact.
+    step2 = list(
+      num_trees     = 500L,
+      # ranger's regression default is 5, which on 8 observations permits at
+      # most one split in a tree. That is a threshold, not a forest, so the
+      # minimum node size is lowered and the consequence is reported.
+      min_node_size = 2L,
+      max_depth     = 8L,
+      mtry          = NULL,   # NULL -> ceiling(p / 3), the regression convention
+
+      # Permutation importance settings. Expensive by design: a permutation
+      # null is the only defensible way to rank covariates at this sample size.
+      imp_n_perm = 10L,
+      imp_n_null = 50L,
+      # Wall-clock budget for the importance step. Comfortable with ranger;
+      # without it the base-R forest would run for hours, so the draw count is
+      # trimmed to fit and the reduced p-value floor is reported. Raise this for
+      # the delivery run.
+      imp_budget_sec = 600,
+
+      # Spatial cross-validation. Each held-out core also removes every
+      # training core within this radius, so a core is never predicted from a
+      # near-neighbour that is effectively itself. The default is the median
+      # core spacing derived in 09; NULL means "derive it".
+      cv_buffer_km = NULL,
+
+      # PRE-REGISTERED SELECTION RULE. A candidate may be mapped only if it
+      # clears all three. Written here, in config, so it cannot be relaxed in
+      # the script after the numbers come back.
+      require_loco_r2   = 0,    # must beat the observed mean, held out
+      require_loso_r2   = 0,    # must transfer between peat and mineral
+      require_beat_prior = TRUE # must beat simply handing over the published map
     ),
 
     # ---- Bayesian map (script 11) -----------------------------------------
