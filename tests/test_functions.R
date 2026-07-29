@@ -728,6 +728,80 @@ ok(all(vapply(ch, function(g)
    "every band chunk within a tile fits")
 
 # =============================================================================
+section("Lambert Conformal Conic (EPSG:3978)")
+# =============================================================================
+p78 <- lcc_params(3978)
+ok(p78$epsg == 3978L && p78$datum == "NAD83", "3978 is NAD83")
+ok(lcc_params(3979)$datum == "NAD83(CSRS)", "3979 is the CSRS realisation")
+ok(identical(p78$lat_1, lcc_params(3979)$lat_1) &&
+   identical(p78$lon_0, lcc_params(3979)$lon_0),
+   "3978 and 3979 share identical projection parameters")
+throws(lcc_params(4326), "rejects an EPSG code it does not know")
+
+# At the projection origin, easting must be exactly the false easting.
+o <- lonlat_to_lcc(p78$lon_0, p78$lat_0, p78)
+eq(o$x, p78$x_0, "origin longitude maps to the false easting", tol = 1e-6)
+eq(o$y, p78$y_0, "origin latitude maps to the false northing", tol = 1e-6)
+
+# The central meridian must map to x = 0 at every latitude.
+cm <- lonlat_to_lcc(rep(p78$lon_0, 4), c(50, 60, 70, 77), p78)
+ok(all(abs(cm$x) < 1e-6), "the central meridian is x = 0 at all latitudes")
+
+# Symmetry about the central meridian.
+l <- lonlat_to_lcc(-100, 56, p78); r <- lonlat_to_lcc(-90, 56, p78)
+ok(abs(l$x + r$x) < 1e-6, "points equidistant from the central meridian mirror in x")
+eq(l$y, r$y, "and share the same northing", tol = 1e-6)
+
+# Standard parallels: the LCC scale factor is exactly 1 there, so a degree of
+# longitude must project to its true length along that parallel.
+#
+# The reference has to be the ELLIPSOIDAL parallel arc. Using haversine_km()
+# here would be wrong and would fail for the wrong reason: it assumes a sphere,
+# and at 49 N the spherical and ellipsoidal parallel radii differ by 0.52% --
+# far more than any error worth detecting. The formula below is the standard
+# geodetic one and uses only the ellipsoid constants, not the projection
+# machinery, so it is not circular.
+parallel_arc_m <- function(lat_deg, dlon_deg, a, f) {
+  e2  <- 2 * f - f^2
+  phi <- lat_deg * pi / 180
+  N   <- a / sqrt(1 - e2 * sin(phi)^2)       # radius of curvature in the prime vertical
+  N * cos(phi) * (dlon_deg * pi / 180)
+}
+for (sp in c(p78$lat_1, p78$lat_2)) {
+  a1 <- lonlat_to_lcc(p78$lon_0, sp, p78)
+  b1 <- lonlat_to_lcc(p78$lon_0 + 1, sp, p78)
+  proj_m <- sqrt((b1$x - a1$x)^2 + (b1$y - a1$y)^2)
+  true_m <- parallel_arc_m(sp, 1, p78$a, p78$f)
+  ok(abs(proj_m - true_m) / true_m < 2e-4,
+     sprintf("scale is true at the standard parallel %g N", sp))
+}
+# ...and NOT true away from them: LCC compresses between the parallels.
+mid <- (p78$lat_1 + p78$lat_2) / 2
+am <- lonlat_to_lcc(p78$lon_0, mid, p78); bm <- lonlat_to_lcc(p78$lon_0 + 1, mid, p78)
+ok(sqrt((bm$x - am$x)^2 + (bm$y - am$y)^2) <
+     parallel_arc_m(mid, 1, p78$a, p78$f),
+   "between the standard parallels the projection compresses, as LCC must")
+
+# Round trip must return the original coordinates, not merely be self-consistent.
+set.seed(3)
+tl <- runif(50, -110, -80); ta <- runif(50, 48, 62)
+fw <- lonlat_to_lcc(tl, ta, p78)
+bk <- lcc_to_lonlat(fw$x, fw$y, p78)
+ok(max(abs(bk$lon - tl)) < 1e-9, "round trip recovers longitude")
+ok(max(abs(bk$lat - ta)) < 1e-9, "round trip recovers latitude")
+
+# The Fort Severn cores, against values verified independently with PROJ.
+fs <- lonlat_to_lcc(-87.62820, 55.9659990, p78)
+ok(abs(fs$x - 449599.9948) < 0.01 && abs(fs$y - 792274.1280) < 0.01,
+   "FS-01 matches the coordinate PROJ produces, to the centimetre")
+
+throws(lonlat_to_lcc(-95, 90, p78), "rejects a pole, where LCC is undefined")
+
+cmp <- compare_projections(c(0, 100), c(0, 100), c(0, 103), c(0, 104),
+                           id = c("a", "b"))
+eq(cmp$offset_m, c(0, 5), "compare_projections measures the offset (3-4-5)")
+
+# =============================================================================
 section("isTRUE_vec")
 # =============================================================================
 ok(identical(isTRUE_vec(c(TRUE, FALSE, NA)), c(TRUE, FALSE, FALSE)),
