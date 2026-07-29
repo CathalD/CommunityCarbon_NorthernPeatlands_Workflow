@@ -1,0 +1,4 @@
+outputs/current/*
+outputs/versions/*
+!outputs/current/.gitkeep
+!outputs/versions/.gitkeep
