@@ -812,6 +812,276 @@ ok(identical(isTRUE_vec(c("TRUE", "true", "False", "")),
 ok(length(isTRUE_vec(c(TRUE, TRUE))) == 2,
    "returns one value per element, unlike isTRUE()")
 
+# =============================================================================
+section("r2_cv and skill_vs_null -- missing predictions must not create skill")
+# =============================================================================
+local({
+  obs <- c(1, 2, 3, 4, 5, 6)
+  # A model that predicted only ONE core, and got it exactly right, must not be
+  # rewarded for the five folds it never ran. Before the fix, the error sum was
+  # taken over the predicted row while the total sum was taken over all six,
+  # which handed a mean-only null r2 = +0.95 on the 0-30 cm window.
+  pred_one <- c(NA, NA, NA, NA, NA, 6)
+  ok(is.na(r2_cv(obs, pred_one)),
+     "r2 from a single surviving fold is NA, not near 1")
+
+  pred_two <- c(NA, NA, NA, NA, 5, 6)
+  # On the two rows it did predict, the model is perfect, so r2 on those rows
+  # is 1. The point is that the denominator is now built from the same rows.
+  eq(r2_cv(obs, pred_two), 1, "r2 is computed over the predicted rows only")
+
+  # The mean-only null, scored on a subset, must come out at 0 -- not positive.
+  pred_null <- c(NA, NA, NA, mean(obs), mean(obs), mean(obs))
+  sub <- obs[4:6]
+  eq(r2_cv(obs, pred_null), 1 - sum((sub - mean(obs))^2) / sum((sub - mean(sub))^2),
+     "a null scored on a subset uses that subset's own variance")
+
+  ok(is.na(skill_vs_null(obs, rep(NA_real_, 6))),
+     "skill against the null is NA when nothing was predicted")
+
+  m <- metric_set(obs, pred_two)
+  eq(m$n_predicted, 2, "metric_set counts predicted rows")
+  eq(m$n_obs, 6, "metric_set counts observed rows")
+  eq(m$coverage, 2 / 6, "metric_set reports coverage so partial CV is visible")
+
+  full <- metric_set(obs, obs)
+  eq(full$coverage, 1, "complete cross-validation reports coverage 1")
+  eq(full$r2_cv, 1, "a perfect complete prediction still scores r2 = 1")
+})
+
+# =============================================================================
+section("random forest (backend-agnostic)")
+# =============================================================================
+local({
+  set.seed(11)
+  n <- 120
+  X <- data.frame(sig = runif(n), noise = runif(n), flat = rep(2, n))
+  y <- 4 * X$sig + rnorm(n, sd = 0.2)
+
+  m <- fit_rf(X, y, num_trees = 60L, seed = 3L)
+  ok(inherits(m, "ccnp_rf"), "fit_rf returns a tagged object")
+  ok(!("flat" %in% m$vars), "a zero-variance covariate is dropped, not fitted")
+
+  tr <- 1:90; te <- 91:120
+  mt <- fit_rf(X[tr, ], y[tr], num_trees = 100L, seed = 3L)
+  ok(r2_cv(y[te], predict_rf(mt, X[te, ])) > 0.7,
+     "recovers a strong signal on held-out rows")
+
+  # Reproducibility is not optional: an unseeded forest hands the council a
+  # different map on every run.
+  a <- predict_rf(fit_rf(X, y, num_trees = 40L, seed = 9L), X)
+  b <- predict_rf(fit_rf(X, y, num_trees = 40L, seed = 9L), X)
+  ok(identical(a, b), "the same seed gives the identical forest")
+
+  pt <- predict_rf(m, X[1:5, ], per_tree = TRUE)
+  eq(nrow(pt$trees), 5, "per-tree predictions have one row per point")
+  eq(length(pt$pred), 5, "and an ensemble mean per point")
+  eq(pt$pred, rowMeans(pt$trees), "the ensemble mean IS the mean of the trees")
+  ok(all(rf_predict_sd(m, X[1:5, ]) >= 0), "ensemble spread is non-negative")
+
+  # A forest handed nothing usable must return the mean, not fail or invent.
+  dg <- fit_rf(data.frame(z = rep(1, 5)), c(1, 2, 3, 4, 5), seed = 1L)
+  eq(predict_rf(dg, data.frame(z = rep(1, 2))), c(3, 3),
+     "with no usable covariate the forest degrades to the mean")
+
+  throws(predict_rf(m, X[, "noise", drop = FALSE]),
+         "refuses to predict when a fitted covariate is absent")
+})
+
+# =============================================================================
+section("rf_importance -- ranking and permutation null")
+# =============================================================================
+local({
+  set.seed(21)
+  n <- 8
+  X <- data.frame(sig = c(1, 2, 3, 4, 5, 6, 7, 8) / 8,
+                  noise = runif(n), noise2 = runif(n))
+  y <- 6 * X$sig + rnorm(n, sd = 0.2)
+  imp <- rf_importance(X, y, paste0("c", 1:n), n_perm = 2L, n_null = 5L,
+                       seed = 4L, fit_args = list(num_trees = 40L),
+                       verbose = FALSE)
+  ok(imp$covariate[1] == "sig", "the real signal ranks first")
+  ok(imp$importance[1] > imp$importance[nrow(imp)],
+     "importance is ordered descending")
+  ok(all(imp$p_value >= 1 / (1 + 5)),
+     "no p-value below the floor the null draw count allows")
+  ok(all(imp$rank == seq_len(nrow(imp))), "rank is assigned after ordering")
+
+  # With no null draws affordable there is no evidence, so no p-value. Reporting
+  # 1 or 0 would be a claim about a test that was never run.
+  imp0 <- rf_importance(X, y, paste0("c", 1:n), n_perm = 2L, n_null = 0L,
+                        seed = 4L, fit_args = list(num_trees = 20L),
+                        verbose = FALSE)
+  ok(all(is.na(imp0$p_value)), "no null draws means NA p-values, not 1")
+  ok(!any(imp0$beats_chance), "and nothing is marked as beating chance")
+})
+
+# =============================================================================
+section("cv_spatial_buffer")
+# =============================================================================
+local({
+  # Two tight clusters ~40 km apart, mimicking the peat/mineral design.
+  lon <- c(-87.7, -87.701, -87.702, -87.0, -87.001, -87.002)
+  lat <- c(56.00, 56.001, 56.002, 56.30, 56.301, 56.302)
+  X <- data.frame(v = c(1, 1.1, 0.9, 5, 5.1, 4.9))
+  y <- c(1, 1.1, 0.9, 5, 5.1, 4.9)
+  g <- paste0("p", 1:6)
+
+  # A buffer of zero is ordinary leave-one-out: nothing extra is removed.
+  z <- cv_spatial_buffer(X, y, g, lon, lat, 0, fit_null, predict_null)
+  eq(sum(z$folds$n_excluded_by_buffer), 0, "a zero buffer excludes nothing")
+  eq(z$n_folds_used, 6, "and every fold runs")
+
+  # A 1 km buffer removes each point's own cluster-mates, so each fold is
+  # trained only on the OTHER cluster -- the honest, and much harder, test.
+  b <- cv_spatial_buffer(X, y, g, lon, lat, 1, fit_null, predict_null)
+  eq(unique(b$folds$n_excluded_by_buffer), 2,
+     "a 1 km buffer removes the two cluster-mates of each held-out point")
+  eq(unique(b$folds$n_train), 3, "leaving only the far cluster to train on")
+  ok(b$metrics$r2_cv < 0,
+     "predicting one cluster from the other has no skill, as it must not")
+
+  # A buffer wide enough to empty the training set must SKIP folds and say so,
+  # never quietly score whichever folds happened to survive.
+  w <- cv_spatial_buffer(X, y, g, lon, lat, 500, fit_null, predict_null)
+  eq(w$n_folds_used, 0, "an all-consuming buffer runs no folds")
+  eq(w$n_folds_skipped, 6, "and reports every skip")
+  ok(all(is.na(w$predictions$pred)), "producing no predictions at all")
+  ok(is.na(w$metrics$r2_cv), "and refusing to report an r2")
+})
+
+# =============================================================================
+section("warp to EPSG:3978")
+# =============================================================================
+local({
+  bbox <- c(xmin = -88.4, xmax = -87.0, ymin = 55.8, ymax = 56.4)
+  src  <- make_grid(bbox, 300)
+  # A surface that is exactly linear in lon/lat is reproduced exactly by
+  # bilinear interpolation, so any error here is the projection's, not the
+  # interpolator's.
+  z <- outer(src$y, src$x, function(la, lo) 10 * lo + 3 * la)
+
+  ring_lon <- c(-88.2, -87.2, -87.2, -88.2)
+  ring_lat <- c(55.90, 55.90, 56.30, 56.30)
+  g <- lcc_target_grid(ring_lon, ring_lat, 300)
+
+  eq(g$epsg, 3978, "target grid carries the deliverable EPSG")
+  ok(g$xmin %% 300 == 0 && g$ymax %% 300 == 0,
+     "grid origin snaps to whole cells so stacked rasters align")
+  ok(g$nx > 0 && g$ny > 0, "grid has positive extent")
+
+  w <- warp_to_lcc(z, src, g)
+  gx <- rep(g$x, times = g$ny); gy <- rep(g$y, each = g$nx)
+  ll <- lcc_to_lonlat(gx, gy)
+  expect <- 10 * ll$lon + 3 * ll$lat
+  got <- as.vector(t(w))
+  fin <- is.finite(got) & is.finite(expect)
+  ok(sum(fin) > 1000, "the warp fills the target grid")
+  ok(max(abs(got[fin] - expect[fin])) < 1e-6,
+     "warped values match the analytic surface at the inverse-projected point")
+
+  # The grid must be built for the CRS it is warped into.
+  throws(warp_to_lcc(z, src, g, lcc_params(3979)),
+         "refuses to warp a 3978 grid using 3979 parameters")
+
+  # Nearest neighbour must return values that EXIST in the source. Averaging
+  # class codes would invent classes nothing downstream would question.
+  zc <- matrix(sample(c(180, 181, 188), length(z), TRUE), nrow = nrow(z))
+  wn <- warp_to_lcc(zc, src, g, method = "nearest")
+  ok(all(wn[is.finite(wn)] %in% c(180, 181, 188)),
+     "nearest-neighbour warping never invents a class code")
+  wb <- warp_to_lcc(zc, src, g, method = "bilinear")
+  ok(!all(wb[is.finite(wb)] %in% c(180, 181, 188)),
+     "whereas bilinear would -- which is why class layers must use nearest")
+})
+
+# =============================================================================
+section("point_in_ring and masking")
+# =============================================================================
+local({
+  sq_x <- c(0, 10, 10, 0); sq_y <- c(0, 0, 10, 10)
+  ok(point_in_ring(5, 5, sq_x, sq_y), "centre is inside")
+  ok(!point_in_ring(-1, 5, sq_x, sq_y), "west of the square is outside")
+  ok(!point_in_ring(11, 5, sq_x, sq_y), "east of the square is outside")
+  ok(!point_in_ring(5, 11, sq_x, sq_y), "north of the square is outside")
+  eq(sum(point_in_ring(c(5, 5, 20), c(5, 2, 20), sq_x, sq_y)), 2,
+     "vectorised over points")
+
+  # A closed ring (first vertex repeated) must give the same answer as an open
+  # one; a duplicated vertex would otherwise be counted twice by the ray test.
+  ok(identical(point_in_ring(5, 5, c(sq_x, 0), c(sq_y, 0)),
+               point_in_ring(5, 5, sq_x, sq_y)),
+     "a repeated closing vertex does not change the result")
+
+  ring_lon <- c(-88.2, -87.2, -87.2, -88.2)
+  ring_lat <- c(55.90, 55.90, 56.30, 56.30)
+  g <- lcc_target_grid(ring_lon, ring_lat, 1000)
+  m <- matrix(1, nrow = g$ny, ncol = g$nx)
+  mm <- mask_grid_to_ring(m, g, ring_lon, ring_lat)
+  ok(sum(is.finite(mm)) < length(mm),
+     "masking removes the corners the rotated AOI does not cover")
+  ok(sum(is.finite(mm)) > 0.5 * length(mm),
+     "but keeps the bulk of the AOI")
+})
+
+# =============================================================================
+section("densify_ring")
+# =============================================================================
+local({
+  r <- densify_ring(c(0, 1, 1, 0), c(0, 0, 1, 1), n_per_edge = 10L)
+  eq(nrow(r), 4 * 9 + 1, "each edge contributes n-1 points, plus the closure")
+  eq(c(r$lon[1], r$lat[1]), c(r$lon[nrow(r)], r$lat[nrow(r)]),
+     "the densified ring is closed")
+  ok(all(r$lon >= -1e-12 & r$lon <= 1 + 1e-12),
+     "densified points stay on the ring, never outside it")
+  # An already-closed ring must not gain a duplicate edge.
+  r2 <- densify_ring(c(0, 1, 1, 0, 0), c(0, 0, 1, 1, 0), n_per_edge = 10L)
+  eq(nrow(r2), nrow(r), "closing the input explicitly changes nothing")
+})
+
+# =============================================================================
+section("projected GeoTIFF (EPSG:3978)")
+# =============================================================================
+local({
+  ok(!.epsg_is_geographic(3978), "3978 is recognised as projected")
+  ok(.epsg_is_geographic(4326), "4326 is recognised as geographic")
+  throws(.epsg_is_geographic(31370),
+         "an unknown EPSG is refused rather than guessed at")
+
+  kp <- .geo_key_directory(3978, geographic = FALSE, citation_len = 30L)
+  ok(kp[1 + 4 * 1 + 3] == 1L || 1024L %in% kp,
+     "projected keys include GTModelType")
+  ok(3072L %in% kp, "projected keys carry ProjectedCSTypeGeoKey")
+  ok(!(2048L %in% kp), "and NOT GeographicTypeGeoKey")
+  kg <- .geo_key_directory(4326, geographic = TRUE, citation_len = 7L)
+  ok(2048L %in% kg && !(3072L %in% kg), "geographic keys are the mirror image")
+
+  # The citation length must follow the string. A fixed count would make a
+  # reader run off the end of a longer CRS name.
+  long <- .geo_key_directory(3978, geographic = FALSE, citation_len = 30L)
+  ok(30L %in% long, "citation length is carried into the key, not hardcoded")
+
+  p <- tempfile(fileext = ".tif")
+  z <- matrix(as.numeric(1:12), nrow = 3, ncol = 4, byrow = TRUE)
+  write_geotiff(z, p, xmin = 400000, ymax = 800000, xres = 500, yres = 500,
+                epsg = 3978L)
+  ok(file.exists(p) && file.size(p) > 0, "a projected GeoTIFF is written")
+  # Read the tag set back to confirm the projected geokeys really landed.
+  con <- file(p, "rb"); on.exit(close(con), add = TRUE)
+  hdr <- readBin(con, "raw", 8)
+  off <- readBin(hdr[5:8], "integer", size = 4L, endian = "little")
+  seek(con, off)
+  n_ent <- readBin(con, "integer", size = 2L, endian = "little", signed = FALSE)
+  tags <- integer(n_ent)
+  for (i in seq_len(n_ent)) {
+    tags[i] <- readBin(con, "integer", size = 2L, endian = "little", signed = FALSE)
+    readBin(con, "raw", 10)
+  }
+  ok(34735L %in% tags, "the GeoKeyDirectory tag is present")
+  ok(33550L %in% tags && 33922L %in% tags, "pixel scale and tiepoint are present")
+  unlink(p)
+})
+
 # ---- summary -----------------------------------------------------------------
 cat("\n", strrep("=", 60), "\n", sep = "")
 cat(sprintf("passed %d   failed %d\n", .pass, .fail))

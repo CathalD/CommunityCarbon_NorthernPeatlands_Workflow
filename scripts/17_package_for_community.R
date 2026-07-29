@@ -49,7 +49,7 @@ source(file.path(.root, "config.R"))
 
 log_step("17  STEP 1 -- PACKAGE THE CORES FOR THE COMMUNITY")
 
-out_dir <- file.path(CFG$root, "deliverables", "step1_cores")
+out_dir <- file.path(CFG$dir_deliver, "step1_cores")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 seg    <- require_artifact(file.path(CFG$dir_derived, "01_segments_qc.csv"),

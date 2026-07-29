@@ -53,24 +53,45 @@
 #' Keys must appear in ascending KeyID order; each key is four SHORTs:
 #'   (KeyID, TIFFTagLocation, Count, Value_or_Offset).
 #' TIFFTagLocation 0 means the value is the Value_or_Offset field itself.
-.geo_key_directory <- function(epsg, geographic = TRUE) {
+.geo_key_directory <- function(epsg, geographic = TRUE, citation_len = 7L) {
   # 1024 GTModelTypeGeoKey    : 2 = geographic, 1 = projected
   # 1025 GTRasterTypeGeoKey   : 1 = RasterPixelIsArea
   # 2048 GeographicTypeGeoKey / 3072 ProjectedCSTypeGeoKey
-  # 2049 GeogCitationGeoKey   : ASCII, stored in tag 34737
+  # 2049 GeogCitationGeoKey / 3073 PCSCitationGeoKey : ASCII, held in tag 34737
+  #
+  # The citation key must declare the true length of the ASCII payload. A fixed
+  # count here would make readers run off the end of the string, or truncate a
+  # CRS name, so it is passed in rather than assumed.
+  cl <- as.integer(citation_len)
   keys <- if (geographic) {
     rbind(c(1024L, 0L, 1L, 2L),
           c(1025L, 0L, 1L, 1L),
           c(2048L, 0L, 1L, as.integer(epsg)),
-          c(2049L, 34737L, 7L, 0L))
+          c(2049L, 34737L, cl, 0L))
   } else {
     rbind(c(1024L, 0L, 1L, 1L),
           c(1025L, 0L, 1L, 1L),
-          c(3072L, 0L, 1L, as.integer(epsg)))
+          c(3072L, 0L, 1L, as.integer(epsg)),
+          c(3073L, 34737L, cl, 0L))
   }
   keys <- keys[order(keys[, 1]), , drop = FALSE]
   header <- c(1L, 1L, 0L, nrow(keys))   # version, revision, minor, n keys
   c(header, as.integer(t(keys)))
+}
+
+#' Is an EPSG code a geographic (lon/lat) CRS, as far as this workflow needs?
+#'
+#' Only the codes this workflow actually writes are listed. Anything else is
+#' refused rather than guessed at: silently mislabelling a projected raster as
+#' geographic would place it in the Gulf of Guinea, and the failure would be
+#' obvious; mislabelling one Canadian projection as another would not be.
+.epsg_is_geographic <- function(epsg) {
+  epsg <- as.integer(epsg)
+  if (epsg %in% c(4326L, 4269L, 4617L)) return(TRUE)
+  if (epsg %in% c(3978L, 3979L, 3573L, 3347L)) return(FALSE)
+  stop("write_geotiff() does not know whether EPSG:", epsg,
+       " is geographic or projected. Add it to .epsg_is_geographic().",
+       call. = FALSE)
 }
 
 #' Write a single-band GeoTIFF from a matrix. Pure with respect to `z`.
@@ -80,17 +101,32 @@
 #' @param path    output file.
 #' @param xmin    western edge of the raster (not the centre of the first cell).
 #' @param ymax    northern edge of the raster.
-#' @param xres,yres  cell size in CRS units; both POSITIVE.
-#' @param epsg    EPSG code. Only 4326 is exercised by this workflow.
+#' @param xres,yres  cell size in CRS units; both POSITIVE. For a projected CRS
+#'                these are METRES, not degrees.
+#' @param epsg    EPSG code. 4326 (lon/lat) and 3978 (NAD83 / Canada Atlas
+#'                Lambert, the community deliverable CRS) are both exercised.
 #' @param datatype "Float32" or "Int32".
 #' @param nodata  value written to the GDAL_NODATA tag. Defaults to NaN for
 #'                Float32 and -9999 for Int32.
+#' @param citation ASCII CRS name. Defaults to a name matching `epsg` rather
+#'                than to "WGS 84", so a projected raster cannot inherit a
+#'                geographic citation by forgetting an argument.
 #'
 #' @return the path, invisibly.
 write_geotiff <- function(z, path, xmin, ymax, xres, yres,
                           epsg = 4326L, datatype = c("Float32", "Int32"),
-                          nodata = NULL, citation = "WGS 84|") {
+                          nodata = NULL, citation = NULL) {
   datatype <- match.arg(datatype)
+  geographic <- .epsg_is_geographic(epsg)
+  if (is.null(citation)) {
+    citation <- switch(as.character(as.integer(epsg)),
+                       "4326" = "WGS 84|",
+                       "4269" = "NAD83|",
+                       "4617" = "NAD83(CSRS)|",
+                       "3978" = "NAD83 / Canada Atlas Lambert|",
+                       "3979" = "NAD83(CSRS) / Canada Atlas Lambert|",
+                       paste0("EPSG:", epsg, "|"))
+  }
   if (!is.matrix(z)) stop("`z` must be a matrix", call. = FALSE)
   if (xres <= 0 || yres <= 0) stop("`xres` and `yres` must be positive", call. = FALSE)
 
@@ -109,7 +145,8 @@ write_geotiff <- function(z, path, xmin, ymax, xres, yres,
     format(nodata, scientific = FALSE, trim = TRUE)
   }
 
-  geokeys  <- .geo_key_directory(epsg, geographic = TRUE)
+  geokeys  <- .geo_key_directory(epsg, geographic = geographic,
+                                 citation_len = nchar(citation))
   pixscale <- c(xres, yres, 0)
   # Tiepoint maps raster (0,0) -- the OUTER corner of the first cell -- to the
   # world coordinate (xmin, ymax). RasterPixelIsArea, so this is an edge.
