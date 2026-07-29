@@ -1,0 +1,9 @@
+"campaign","core_id","gwl_class","worldcover","gwl_label","wc_label","stock_0_30_kgm2","is_lower_bound"
+"FS_2025_mineral","FS-01",182,30,"Swamp","Grassland",14.2630045832,FALSE
+"FS_2025_mineral","FS-02",0,30,,"Grassland",8.3815614382,FALSE
+"FS_2025_mineral","FS-03",182,90,"Swamp","Herbaceous wetland",4.2223031185,FALSE
+"FS_2025_mineral","FS-04",0,80,,"Water",8.7587719396,FALSE
+"FS_2025_mineral","FS-05",182,90,"Swamp","Herbaceous wetland",6.105449784,FALSE
+"PM_2024_peat","PM-01-A",182,90,"Swamp","Herbaceous wetland",3.0578035,TRUE
+"PM_2024_peat","PM-02-A",182,90,"Swamp","Herbaceous wetland",3.0833445,TRUE
+"PM_2024_peat","PM-03-A",182,90,"Swamp","Herbaceous wetland",10.01686145,FALSE

@@ -1,0 +1,9 @@
+"metric","value"
+"n_cores",8
+"n_pairs",28
+"extent_km",23.6
+"nn_median_km",2.51
+"nn_min_km",1.31
+"nn_max_km",7.7
+"n_informative_lag_bins",0
+"kriging_supported",0

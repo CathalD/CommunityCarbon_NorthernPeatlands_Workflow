@@ -1,0 +1,3 @@
+"layer","n_cores_compared","core_mean_kgm2","layer_mean_kgm2","bias_layer_minus_core","rmse","pearson_r","validation_status"
+"soilgrids_ocs_0_30_kgm2",6,8.62465871891667,59.0917833666667,50.46712464775,52.2946299397999,-0.236348537135086,"QUASI-EXTERNAL local consistency check"
+"sothe2022_soc_0_30_kgm2",5,8.62465871891667,36.1344738,27.53663772522,30.3405975091893,-0.908611870087007,"QUASI-EXTERNAL local consistency check"
