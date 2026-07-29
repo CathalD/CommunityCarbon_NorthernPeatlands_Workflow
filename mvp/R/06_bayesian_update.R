@@ -17,9 +17,12 @@
 
 .this_dir <- Sys.getenv("MVP_R_DIR", "")
 if (!nzchar(.this_dir)) {
-  .args <- commandArgs(trailingOnly = FALSE)
-  .this_file <- sub("^--file=", "", .args[grepl("^--file=", .args)])
-  .this_dir <- if (length(.this_file)) dirname(.this_file[[1]]) else getwd()
+  # Works three ways: Rscript (finds --file=), source() from ANY working
+  # directory (finds the sourced file's own path), and run_all.R (sets
+  # MVP_R_DIR). Only falls back to getwd() if all three fail.
+  .f <- sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))
+  if (!length(.f)) .f <- unlist(lapply(sys.frames(), function(e) e$ofile))
+  .this_dir <- if (length(.f)) dirname(normalizePath(.f[[1]])) else getwd()
 }
 source(file.path(.this_dir, "00_utils.R"))
 source(file.path(.this_dir, "..", "config.R"))

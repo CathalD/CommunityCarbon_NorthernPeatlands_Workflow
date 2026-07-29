@@ -115,5 +115,18 @@ failure will be one of:
   there.
 - Earth Engine auth (step 02 only) → `rgee::ee_Initialize()` again.
 
+### Earth Engine gotcha worth knowing
+
+`ERROR in Earth Engine servers: Exported bands must have compatible data
+types; found inconsistent types: Float32 and Float64.`
+
+Earth Engine will not export a multi-band image whose bands have different
+data types, and a covariate stack naturally mixes them: `ee$Terrain$slope()`
+returns Float32, `median()` and `normalizedDifference()` return Float64, and
+JRC water occurrence is uint8. Step 02 calls `$toFloat()` on the finished
+stack to make them uniform. **If you add another covariate band later, the
+`$toFloat()` at the end of the `predictors <- ...` chain is what keeps the
+export working** — don't drop it.
+
 Paste the error and the last few lines of console output back and we'll
 fix that one step without touching the others.
