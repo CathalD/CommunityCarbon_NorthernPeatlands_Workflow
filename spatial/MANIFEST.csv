@@ -1,0 +1,7 @@
+"file","type","units","scientific_status","depth_support"
+"cores.geojson","vector point","mixed","OBSERVATION -- measured cores","see attributes"
+"aoi.geojson","vector polygon","n/a","n/a -- study area outline","n/a"
+"dist_to_nearest_core_m.tif","raster Float32","metres","GEOMETRY -- exact, no inference","n/a"
+"nearest_core_index.tif","raster Int32","core index (see legend)","DIAGNOSTIC -- Thiessen assignment","n/a"
+"DIAGNOSTIC_soc_nearest_core_kgm2.tif","raster Float32","kg C/m2","DIAGNOSTIC -- NOT a carbon map; nearest core's value, unmasked","0-14.5 cm (common support)"
+"PRODUCT1b_soc_within_credible_radius_kgm2.tif","raster Float32","kg C/m2","SAMPLE-BASED, MASKED -- nearest core's value within the credible radius only","0-14.5 cm (common support)"
