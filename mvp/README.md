@@ -59,7 +59,9 @@ Then the external-comparison add-on:
 ```bash
 Rscript mvp/R/08_external_ingest.R       # no GEE needed
 Rscript mvp/R/09_external_ecosystem.R    # needs GEE, ~11,500 points, chunked
-Rscript mvp/R/10_comparison_outputs.R    # figures + GeoPackage
+Rscript mvp/R/10_comparison_outputs.R    # comparison figures + GeoPackage
+Rscript mvp/R/11_context_figures.R       # the six side-by-side figures
+Rscript mvp/R/12_community_story.R       # contribution figure + COMMUNITY_BRIEF.md
 ```
 
 Once you trust the whole chain, `Rscript mvp/run_all.R` runs everything in
@@ -133,6 +135,31 @@ profiles. The nearest profile anywhere with a complete, comparable 0–30 cm
 stock is **700 km away**. Step 08 recomputes these numbers on every run and
 writes them to `narrative_stats.csv`, so anything quoted from them is traceable
 rather than remembered.
+
+### Steps 11–12: context and community story
+
+Step 11 draws six side-by-side comparison figures:
+
+| Figure | Question it answers |
+|---|---|
+| `context_1_ecosystem_panels` | Do the databases agree on what a given wetland class looks like? *(needs step 09)* |
+| `context_2_paired_boxplots` | Is mineral-above-peat over 0–30 cm a real pattern or an artefact of 8 cores? |
+| `context_3_bulk_density` | *Why* peat holds less carbon in the shallow layer |
+| `context_4_cumulative_carbon` | What a 0–30 cm survey captures — and **measures** the depth assumption |
+| `context_5_two_windows` | Why our numbers look small beside published ones |
+| `context_6_distance_vs_stock` | Is any nearby analogue defensible? |
+
+**Figure 4 feeds back into the map.** Step 06 currently *assumes*
+`CFG$bayes$shallow_fraction_of_column = 0.15`. CanPeat's full-depth profiles
+can estimate that share empirically, so step 11 writes
+`shallow_fraction_measured.csv` — compare it against the config value and
+update if they disagree. This is the one comparison figure that changes a
+number in the mapping pipeline rather than only describing the data.
+
+Step 12 answers "what did these cores add": the mineral-gap timeline
+(`context_7_mineral_gap.png`), peat thickness against the regional mean
+(`context_8_peat_thickness.png`), and `COMMUNITY_BRIEF.md` — plain language,
+every number computed in the run that wrote it.
 
 ## Known simplifications (intentional, for this first pass)
 

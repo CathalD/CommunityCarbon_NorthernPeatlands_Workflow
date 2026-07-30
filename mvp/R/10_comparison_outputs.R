@@ -34,6 +34,7 @@ if (!nzchar(.this_dir)) {
 }
 source(file.path(.this_dir, "00_utils.R"))
 source(file.path(.this_dir, "..", "config.R"))
+source(file.path(.this_dir, "plot_helpers.R"))
 
 library(readr)
 library(dplyr)
@@ -45,31 +46,8 @@ E <- CFG$ext
 SHOW_RAW_LINES <- FALSE   # TRUE = draw every external profile faintly
 
 ensure_dir(CFG$dir_figures)
-
-#' Open a PNG, run the plotting code, close the device even if it errors.
-fig <- function(name, expr, width = 1600, height = 1150, res = 185) {
-  png(file.path(CFG$dir_figures, paste0(name, ".png")),
-      width = width, height = height, res = res)
-  on.exit(dev.off(), add = TRUE)
-  force(expr)
-  msg("wrote figures/", name, ".png")
-}
-
-#' Same colour at a given opacity. Defined here rather than relying on base R's
-#' colour-adjust helper, so there is nothing to get wrong about its name or
-#' argument signature across R versions.
-fade <- function(col, alpha) {
-  v <- grDevices::col2rgb(col) / 255
-  grDevices::rgb(v[1], v[2], v[3], alpha = alpha)
-}
-
-# Palette. Organic warm, mineral cool, our cores black so they always read as
-# the subject rather than one series among thousands.
-COL <- c(organic = "#C1660A", mineral = "#1F5FA8", unknown = "#8A8A8A",
-        ours = "#111111")
-DS_COL <- c("CanPeat" = "#C1660A", "NPDB" = "#1F5FA8",
-           "Janousek" = "#2E8B6F", "WOSIS Canada" = "#8B5FA8",
-           "Fort Severn" = "#111111")
+# fig(), fade(), COL, DS_COL, densify(), envelope(), draw_env() all come from
+# plot_helpers.R, shared with steps 11 and 12.
 
 # -----------------------------------------------------------------------------
 # 1. Load
@@ -119,59 +97,9 @@ if (have_eco) {
 # Carbon density per cm on a common 1 cm depth grid, so profiles with unequal
 # layer thickness are directly comparable. Same quantity plotted in 01b.
 
-grid_cm <- 0:300
-
-#' Step-interpolate a profile's carbon density onto the 1 cm grid. Returns NA
-#' below the profile's own bottom -- profiles are never extended past what was
-#' measured.
-densify <- function(upper, lower, dens, grid = grid_cm) {
-  out <- rep(NA_real_, length(grid))
-  ok <- is.finite(upper) & is.finite(lower) & is.finite(dens) & lower > upper
-  for (i in which(ok)) {
-    sel <- grid >= upper[i] & grid < lower[i]
-    out[sel] <- dens[i]
-  }
-  out
-}
-
 lay <- lay %>%
   mutate(dens_kgm2_per_cm = ifelse(is.finite(layer_thickness_cm) & layer_thickness_cm > 0,
                                   stock_kgm2_layer / layer_thickness_cm, NA_real_))
-
-#' Per-group percentile envelope across profiles, on the common grid.
-#'
-#' Uses split() rather than filtering inside a loop: NPDB alone is 9,017
-#' profiles over 48,372 layers, and a per-profile subset scan would be
-#' quadratic and take minutes.
-envelope <- function(layer_df, group_col) {
-  groups <- unique(layer_df[[group_col]])
-  groups <- groups[!is.na(groups)]
-  lapply(setNames(groups, groups), function(g) {
-    sub <- layer_df[!is.na(layer_df[[group_col]]) & layer_df[[group_col]] == g, ]
-    by_prof <- split(sub, sub$profile_id)
-    if (length(by_prof) < 3) return(NULL)
-    m <- vapply(by_prof, function(s) {
-      densify(s$upper_depth, s$lower_depth, s$dens_kgm2_per_cm)
-    }, numeric(length(grid_cm)))
-    qs <- function(p) apply(m, 1, quantile, probs = p, na.rm = TRUE, names = FALSE)
-    data.frame(
-      depth = grid_cm,
-      n     = apply(m, 1, function(v) sum(is.finite(v))),
-      p10   = qs(0.10), p50 = qs(0.50), p90 = qs(0.90)
-    )
-  })
-}
-
-#' Draw one envelope. Only where at least `min_n` profiles still contribute, so
-#' the band does not narrow to a spurious line at depth as profiles drop out.
-draw_env <- function(e, col, min_n = 3) {
-  if (is.null(e)) return(invisible())
-  e <- e[is.finite(e$p50) & e$n >= min_n, ]
-  if (!nrow(e)) return(invisible())
-  polygon(c(e$p10, rev(e$p90)), c(e$depth, rev(e$depth)),
-          col = fade(col, 0.18), border = NA)
-  lines(e$p50, e$depth, col = col, lwd = 2.6)
-}
 
 # -----------------------------------------------------------------------------
 # FIGURE 1: full-depth profiles, organic vs mineral
@@ -205,16 +133,7 @@ fig("compare_profiles_full", {
     for (nm in names(env_type)) draw_env(env_type[[nm]], COL[[nm]])
   }
 
-  # Our eight cores, individually, on top.
-  for (cc in unique(oseg$core_id)) {
-    s <- oseg[oseg$core_id == cc, ]
-    s <- s[order(s$depth_top_cm), ]
-    for (i in seq_len(nrow(s))) {
-      lines(rep(s$carbon_density_kgm2_per_cm[i], 2),
-            c(s$depth_top_cm[i], s$depth_bottom_cm[i]),
-            col = COL[["ours"]], lwd = 2.2)
-    }
-  }
+  draw_our_cores(oseg)   # our eight, individually, on top
   abline(h = CFG$reference_depth_cm, col = "grey40", lty = 3)
   text(xmax * 0.98, CFG$reference_depth_cm - 6,
        paste0(CFG$reference_depth_cm, " cm - the full depth of our cores"),
@@ -251,14 +170,7 @@ if (have_eco && "gwl_label" %in% names(prof)) {
                        "\nbands = 10th-90th percentile, line = median"))
     grid(col = "grey92", lty = 1)
     for (nm in names(env_eco)) draw_env(env_eco[[nm]], pal_eco[[nm]])
-    for (cc in unique(oseg$core_id)) {
-      s <- oseg[oseg$core_id == cc, ]; s <- s[order(s$depth_top_cm), ]
-      for (i in seq_len(nrow(s))) {
-        lines(rep(s$carbon_density_kgm2_per_cm[i], 2),
-              c(s$depth_top_cm[i], s$depth_bottom_cm[i]),
-              col = COL[["ours"]], lwd = 2.2)
-      }
-    }
+    draw_our_cores(oseg)
     legend("bottomright",
            legend = c(keep, paste0("Fort Severn cores",
                                    if (length(our_eco)) paste0(" (", paste(our_eco, collapse = ", "), ")") else "")),
