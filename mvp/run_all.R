@@ -16,8 +16,8 @@
 # really lives via an env var, which the step's bootstrap checks first.
 Sys.setenv(MVP_R_DIR = file.path(.this_dir, "R"))
 
-steps <- c("01_clean_and_stocks.R", "02_covariates.R", "03_training_data.R",
-          "04_train_model.R", "05_predict_and_compare.R",
+steps <- c("01_clean_and_stocks.R", "01b_plot_profiles.R", "02_covariates.R",
+          "03_training_data.R", "04_train_model.R", "05_predict_and_compare.R",
           "06_bayesian_update.R", "07_version_and_export.R")
 
 for (s in steps) {

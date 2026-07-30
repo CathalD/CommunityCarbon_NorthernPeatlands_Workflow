@@ -44,20 +44,40 @@ cores <- st_read(cores_path, quiet = TRUE)
 ee_Initialize(project = CFG$gee$project)
 msg("Earth Engine initialised, project: ", CFG$gee$project)
 
-# ---- 1. AOI: a simple buffered hull, not a coast-oriented rectangle -------
+# ---- 1. AOI ----------------------------------------------------------------
+# Prefer the hand-drawn coast-following polygon in mvp/data/aoi.geojson. It
+# follows the shoreline trend, so it contains the sampled transect without
+# spending most of its area over Hudson Bay. Fall back to a buffered convex
+# hull of the cores only if that file is absent.
 
-aoi_hull <- cores %>%
-  st_transform(CFG$crs_equal_area) %>%
-  st_union() %>%
-  st_convex_hull() %>%
-  st_buffer(CFG$gee$aoi_buffer_km * 1000) %>%
-  st_transform(CFG$crs_geographic)
+if (file.exists(CFG$file_aoi)) {
+  aoi_sf <- st_read(CFG$file_aoi, quiet = TRUE) %>% st_transform(CFG$crs_geographic)
+  aoi_geom <- st_union(st_geometry(aoi_sf))
+  msg("AOI: supplied polygon from ", basename(CFG$file_aoi))
+} else {
+  aoi_geom <- cores %>%
+    st_transform(CFG$crs_equal_area) %>%
+    st_union() %>% st_convex_hull() %>%
+    st_buffer(CFG$gee$aoi_buffer_km * 1000) %>%
+    st_transform(CFG$crs_geographic)
+  msg("AOI: no ", basename(CFG$file_aoi), " found, fell back to core hull + ",
+     CFG$gee$aoi_buffer_km, " km buffer")
+}
 
-st_write(st_sf(geometry = aoi_hull), file.path(CFG$dir_current, "aoi.geojson"),
+# Every core must be inside the AOI, or its covariates come back NA and the
+# core silently drops out of the model at step 4.
+outside <- cores$core_id[!apply(st_intersects(cores, aoi_geom, sparse = FALSE), 1, any)]
+if (length(outside)) {
+  stop("These cores fall OUTSIDE the AOI: ", paste(outside, collapse = ", "),
+      ". Their covariates would all be NA. Widen mvp/data/aoi.geojson.")
+}
+area_km2 <- as.numeric(st_area(st_transform(aoi_geom, CFG$crs_equal_area))) / 1e6
+msg(sprintf("AOI area %.0f km2; all %d cores inside", area_km2, nrow(cores)))
+
+st_write(st_sf(geometry = aoi_geom), file.path(CFG$dir_current, "aoi.geojson"),
          delete_dsn = TRUE, quiet = TRUE)
-msg("AOI: convex hull of cores + ", CFG$gee$aoi_buffer_km, " km buffer")
 
-aoi_ee <- sf_as_ee(st_sf(geometry = aoi_hull))$geometry()
+aoi_ee <- sf_as_ee(st_sf(geometry = aoi_geom))$geometry()
 
 # ---- 2. covariate stack ----------------------------------------------------
 
@@ -69,15 +89,57 @@ season_filter <- function(coll) {
                                    max(CFG$gee$season_years), "year"))
 }
 
-# GLO30 is an ImageCollection of tiles, so mosaic it into one image first.
-elevation <- ee$ImageCollection(CFG$gee$asset_dem)$select("DEM")$mosaic()$
-  rename("elevation")
-slope     <- ee$Terrain$slope(elevation)$rename("slope")
+# --- terrain ---------------------------------------------------------------
+# Copernicus GLO30 (an ImageCollection of tiles) as the base, ArcticDEM
+# mosaicked ON TOP so it wins where it exists and Copernicus fills its gaps.
+# ArcticDEM alone leaves a masked band here, which is what cost the first run
+# both elevation and slope.
+cop <- ee$ImageCollection(CFG$gee$asset_dem_copernicus)$select("DEM")$
+  mosaic()$rename("elevation")
+arctic <- ee$Image(CFG$gee$asset_dem_arctic)$select("elevation")
+dem_native <- ee$ImageCollection(list(cop, arctic))$mosaic()$rename("elevation")
 
+# PIN THE WORKING RESOLUTION BEFORE ANY TERRAIN OPERATION. This line is
+# load-bearing, not tidying. Earth Engine runs slope and focal operations at
+# the image's native scale unless told otherwise. ArcticDEM is 2 m, so a 2 km
+# focal radius on the native grid asks for a kernel a thousand pixels across
+# and Earth Engine refuses the request outright ("Reprojection output too
+# large"). Reprojecting to the analysis scale first makes the kernels the size
+# their names claim, and costs nothing scientifically here: this landscape has
+# metres of relief over tens of kilometres, so 2 m detail is not the signal.
+dem <- dem_native$resample("bilinear")$
+  reproject(crs = CFG$gee$export_crs, scale = CFG$gee$scale_m)
+
+slope <- ee$Terrain$slope(dem)$rename("slope_deg")
+
+# Topographic position: elevation minus the local mean, at two scales. On a
+# plain this flat, POSITION carries the peat-vs-mineral signal that absolute
+# elevation does not.
+tpi <- function(img, radius_m, name) {
+  k <- ee$Kernel$circle(radius = radius_m, units = "meters")
+  img$subtract(img$focalMean(kernel = k))$rename(name)
+}
+tpi_small <- tpi(dem, CFG$gee$tpi_radii_m[["small"]], "tpi_300m")
+tpi_large <- tpi(dem, CFG$gee$tpi_radii_m[["large"]], "tpi_2km")
+
+# --- distance from the coast -----------------------------------------------
+# Isostatic rebound makes distance inland a proxy for time since the sea left,
+# and therefore for how long peat has had to accumulate. Built from the JRC
+# water layer so it needs no extra asset.
+gsw <- ee$Image(CFG$gee$asset_jrc_water)
+sea <- gsw$select("occurrence")$gt(90)$selfMask()   # permanent water
+dist_coast <- sea$fastDistanceTransform(4096)$sqrt()$
+  multiply(ee$Image$pixelArea()$sqrt())$
+  rename("dist_coast_m")
+
+# --- Sentinel-1 ------------------------------------------------------------
+# Require BOTH polarisations: filtering on VV alone can admit scenes with no
+# VH band, and median() over a partly-absent band gives a masked result.
 s1 <- ee$ImageCollection(CFG$gee$asset_s1)$
   filterBounds(aoi_ee)$
   filter(ee$Filter$eq("instrumentMode", "IW"))$
-  filter(ee$Filter$listContains("transmitterReceiverPolarisation", "VV"))
+  filter(ee$Filter$listContains("transmitterReceiverPolarisation", "VV"))$
+  filter(ee$Filter$listContains("transmitterReceiverPolarisation", "VH"))
 s1 <- season_filter(s1)
 s1_med <- s1$select(c("VV", "VH"))$median()$rename(c("s1_vv", "s1_vh"))
 
@@ -88,18 +150,47 @@ s2 <- season_filter(s2)
 s2_med <- s2$median()
 ndvi <- s2_med$normalizedDifference(c("B8", "B4"))$rename("s2_ndvi")
 
-water <- ee$Image(CFG$gee$asset_jrc_water)$select("occurrence")$
-  rename("water_occurrence")$unmask(0)
+water <- gsw$select("occurrence")$unmask(0)$rename("water_occurrence")
 
 # Earth Engine refuses to export a multi-band image whose bands have
 # different data types, and these do: the DEM and slope come back Float32
 # while median() and normalizedDifference() produce Float64, and JRC
 # occurrence is uint8. Casting the whole stack to Float32 with $toFloat()
 # makes them uniform. Do this on ANY multi-band export you add later.
-predictors <- elevation$addBands(slope)$addBands(s1_med)$
-  addBands(ndvi)$addBands(water)$clip(aoi_ee)$toFloat()
+predictors <- dem$
+  addBands(slope)$
+  addBands(tpi_small)$
+  addBands(tpi_large)$
+  addBands(dist_coast)$
+  addBands(s1_med)$
+  addBands(ndvi)$
+  addBands(water)$
+  clip(aoi_ee)$toFloat()
 
-msg("covariate stack: ", paste(predictors$bandNames()$getInfo(), collapse = ", "))
+band_names <- predictors$bandNames()$getInfo()
+msg(length(band_names), "-band covariate stack: ", paste(band_names, collapse = ", "))
+
+# Sample the stack AT THE CORES before spending minutes on the export. A band
+# that comes back NA here has no coverage over this AOI, and finding that out
+# now is far cheaper than finding it out in step 3.
+check <- tryCatch(
+  ee_extract(predictors, sf_as_ee(cores["core_id"]), scale = CFG$gee$scale_m,
+            fun = ee$Reducer$first(), sf = FALSE),
+  error = function(e) { msg("pre-export check skipped: ", conditionMessage(e)); NULL })
+
+if (!is.null(check)) {
+  band_cols <- intersect(band_names, names(check))
+  na_bands <- band_cols[vapply(check[band_cols], function(v) all(is.na(v)), logical(1))]
+  if (length(na_bands)) {
+    msg("WARNING: these bands are NA at EVERY core: ", paste(na_bands, collapse = ", "))
+    msg("  They have no coverage over this AOI. Fix the asset in config.R before ",
+       "continuing -- step 4 would drop them and you would be modelling on less ",
+       "than you think.")
+  } else {
+    msg("pre-export check: all ", length(band_cols),
+       " bands have values at all ", nrow(cores), " cores")
+  }
+}
 
 #' Download an ee$Image to a local GeoTIFF.
 #'

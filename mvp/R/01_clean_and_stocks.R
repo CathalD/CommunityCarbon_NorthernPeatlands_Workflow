@@ -41,8 +41,13 @@ msg("read ", nrow(raw), " segment rows from ", basename(CFG$file_cores_raw))
 seg <- raw %>%
   transmute(
     core_id           = trimws(`Core Id`),
+    sample_id         = trimws(`Sample Id`),
     latitude          = Latitude,
     longitude_raw     = Longitude,
+    # NOTE: `Depth` in the raw file is segment THICKNESS, not depth below
+    # surface. Read as depth-below-surface the values would decrease going
+    # down two of the cores, which is impossible -- that is how the original
+    # workflow established the semantics, and it holds here.
     thickness_cm      = Depth,
     bulk_density_gcm3 = `Bulk Density`,
     soc_pct           = SOC
@@ -80,7 +85,24 @@ msg("repaired longitude sign on ", sum(seg$lon_repaired), " of ", nrow(seg), " r
 # The x10 converts g/cm2 (bulk_density x thickness) x fraction to kg/m2.
 
 seg <- seg %>%
-  mutate(stock_kgm2_segment = bulk_density_gcm3 * (soc_pct / 100) * thickness_cm * 10)
+  mutate(stock_kgm2_segment = bulk_density_gcm3 * (soc_pct / 100) * thickness_cm * 10,
+        # Carbon per centimetre of profile. This, not the segment total, is
+        # what makes profiles with unequal segment thickness comparable, so it
+        # is what the raw profile plot shows.
+        carbon_density_kgm2_per_cm = bulk_density_gcm3 * (soc_pct / 100) * 10)
+
+# ---- 2b. depth intervals, from the segment order --------------------------
+# Segment order comes from the trailing integer in Sample Id (PM-03-A-1 ..
+# PM-03-A-4). Single-segment cores carry no trailing integer and get index 1.
+# Depth intervals are then the running sum of thickness within each core.
+seg <- seg %>%
+  mutate(seg_index = suppressWarnings(as.integer(sub(".*-(\\d+)$", "\\1", sample_id))),
+        seg_index = ifelse(is.na(seg_index), 1L, seg_index)) %>%
+  arrange(core_id, seg_index) %>%
+  group_by(core_id) %>%
+  mutate(depth_bottom_cm = cumsum(thickness_cm),
+        depth_top_cm    = depth_bottom_cm - thickness_cm) %>%
+  ungroup()
 
 cores <- seg %>%
   group_by(core_id, campaign) %>%
@@ -120,7 +142,8 @@ cores_sf <- st_as_sf(cores, coords = c("longitude", "latitude"),
 st_write(cores_sf, file.path(CFG$dir_current, "cores_clean.geojson"),
          delete_dsn = TRUE, quiet = TRUE)
 write_csv(cores, file.path(CFG$dir_current, "cores_clean.csv"))
+# Segment level, with depth intervals -- the input for the profile plots.
+write_csv(seg, file.path(CFG$dir_current, "segments_clean.csv"))
 
-msg("wrote ", file.path(CFG$dir_current, "cores_clean.geojson"))
-msg("wrote ", file.path(CFG$dir_current, "cores_clean.csv"))
-msg("01 complete")
+msg("wrote cores_clean.geojson, cores_clean.csv, segments_clean.csv")
+msg("01 complete  --  next: 01b_plot_profiles.R to eyeball the profiles")

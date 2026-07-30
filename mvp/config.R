@@ -20,8 +20,14 @@ CFG <- list(
   # truth for the field data, not a copy.
   file_cores_raw = file.path(dirname(.mvp_root), "data", "raw",
                              "community_soil_cores.csv"),
+  # Hand-drawn, coast-following study area. Preferred over a computed buffer
+  # around the cores: it follows the shoreline trend instead of spending most
+  # of its area over open water. Step 02 uses this if present and falls back
+  # to a buffered convex hull of the cores if it is missing.
+  file_aoi = file.path(.mvp_root, "data", "aoi.geojson"),
   dir_current = file.path(.mvp_root, "outputs", "current"),
   dir_versions = file.path(.mvp_root, "outputs", "versions"),
+  dir_figures = file.path(.mvp_root, "outputs", "current", "figures"),
 
   seed = 20260727L,
 
@@ -52,13 +58,20 @@ CFG <- list(
     # scripts/03_gee_covariates.R in the original repo for the full
     # rationale) plus one moderate one -- add more back later if the model
     # needs them.
-    # Copernicus GLO30, NOT ArcticDEM. ArcticDEM covers land north of 60N
-    # (plus Alaska, Greenland, Kamchatka); Fort Severn is at 56N and falls
-    # OUTSIDE it, so ArcticDEM returns all-NoData here -- silently costing you
-    # elevation and slope, which are the strongest predictors in a landscape
-    # where centimetres of relief decide peat vs. mineral. GLO30 covers
-    # 60S-85N. This is an ImageCollection, so step 02 mosaics it.
-    asset_dem       = "COPERNICUS/DEM/GLO30",
+    # TWO DEMs, deliberately. ArcticDEM is 2 m and better where it exists, but
+    # it has gaps around Fort Severn -- using it alone returns a masked band
+    # and costs you elevation AND slope. Copernicus GLO30 is the base layer and
+    # ArcticDEM is mosaicked on top, so ArcticDEM wins where present and
+    # Copernicus fills the holes. Step 02 pins the working resolution before
+    # any terrain operation; see the comment there, it is load-bearing.
+    asset_dem_copernicus = "COPERNICUS/DEM/GLO30",
+    asset_dem_arctic     = "UMN/PGC/ArcticDEM/V3/2m_mosaic",
+
+    # Topographic position radii, metres. On a plain with metres of relief over
+    # tens of kilometres, absolute elevation says little and POSITION says a
+    # lot -- but only if you name the scale. 300 m captures ridge-and-flark
+    # microtopography; 2 km captures the broad peat plateaus.
+    tpi_radii_m = c(small = 300, large = 2000),
     asset_s1        = "COPERNICUS/S1_GRD",
     asset_s2        = "COPERNICUS/S2_SR_HARMONIZED",
     asset_jrc_water = "JRC/GSW1_4/GlobalSurfaceWater",
@@ -76,11 +89,16 @@ CFG <- list(
     season_years     = 2023:2025,
     s2_cloud_pct     = 40,
 
-    # AOI + export. Smaller buffer and coarser scale than the original
-    # (50 km / 30 m) -- an MVP-sized covariate stack that downloads in
-    # under a minute rather than requiring tiled batch requests.
+    # Fallback buffer, used ONLY if file_aoi above is missing.
     aoi_buffer_km = 15,
-    scale_m       = 50L,
+
+    # 100 m, not 30 m. The supplied AOI spans roughly 106 x 107 km; at 30 m
+    # that is ~12 million pixels per band, which is what forced the original
+    # workflow into tiled, byte-budgeted batch requests. At 100 m the whole
+    # stack is ~1 million pixels per band and exports in one go. This
+    # landscape has metres of relief over tens of kilometres, so 30 m detail
+    # is not the signal -- drop this to 30L only if you have a reason.
+    scale_m       = 100L,
     export_crs    = "EPSG:4326"
   ),
 

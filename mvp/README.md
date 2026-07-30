@@ -36,6 +36,7 @@ output before moving on:
 
 ```bash
 Rscript mvp/R/01_clean_and_stocks.R
+Rscript mvp/R/01b_plot_profiles.R      # two carbon-depth profile PNGs
 Rscript mvp/R/02_covariates.R          # needs Earth Engine auth, takes longest
 Rscript mvp/R/03_training_data.R
 Rscript mvp/R/04_train_model.R
@@ -43,6 +44,15 @@ Rscript mvp/R/05_predict_and_compare.R
 Rscript mvp/R/06_bayesian_update.R
 Rscript mvp/R/07_version_and_export.R
 ```
+
+## The study area
+
+`mvp/data/aoi.geojson` is the coast-following polygon that defines the mapped
+extent (~9,700 km²). Step 02 uses it if present and only falls back to a
+buffered hull around the cores if it's missing, so **edit that file to change
+the mapping extent** — no code change needed. Step 02 stops with an error if
+any core falls outside it, since a core outside the AOI silently loses all its
+covariates.
 
 Once you trust the whole chain, `Rscript mvp/run_all.R` runs all seven in
 order.
@@ -56,8 +66,9 @@ always "the latest state." Step 7 archives a full copy of it into
 
 | Step | What "it worked" looks like |
 |---|---|
-| 01 | Prints a table of 8 cores with `stock_kgm2` roughly 2–10 kg/m². `cores_clean.geojson` opens in QGIS/geojson.io. |
-| 02 | Downloads `predictors.tif` (6 bands), `prior_li2025.tif`, `prior_sothe_0_30.tif` to `outputs/current/`. This is the slow step (Earth Engine export) — expect a minute or more. |
+| 01 | Prints a table of 8 cores with `stock_kgm2` roughly 3–15 kg/m². `cores_clean.geojson` opens in QGIS/geojson.io. |
+| 01b | Two PNGs in `outputs/current/figures/`. Peat cores should show low carbon *density* but be organic-rich; the harmonised plot should show PM-01-A and PM-02-A ending early as dashed lines. |
+| 02 | Prints a pre-export check confirming every band has a value at all 8 cores, then downloads `predictors.tif` (9 bands), `prior_li2025.tif`, `prior_sothe_0_30.tif`. Slowest step — several minutes. |
 | 03 | `training_data.csv` has 8 rows, one column per covariate, no unexpected `NA`s. |
 | 04 | Prints leave-one-core-out RMSE and R². **Expect a weak score** — 8 cores is a small sample and the script says so rather than hiding it. This is expected, not broken. |
 | 05 | `carbon_prediction.tif` and `carbon_uncertainty.tif` cover the AOI; `prediction_residuals.csv` shows 8 rows of observed-minus-prior. |
