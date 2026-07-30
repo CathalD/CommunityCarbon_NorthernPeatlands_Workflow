@@ -1,0 +1,6 @@
+group,depth_basis,mean_kgm2,sd_kgm2,source,notes
+Hudson Bay Lowlands (published),full peat column,86,35,"Li et al. 2025",Regional mean over a mean peat depth of 184 +/- 48 cm. Carried through from this project's own reference catalogue.
+Canada (all soils),0-30 cm,,,,FILL IN. Leave blank and this row is skipped rather than guessed at.
+Canada (all soils),0-100 cm,,,,FILL IN.
+Canada (peatlands),full peat column,,,,FILL IN.
+Ontario (all soils),0-30 cm,,,,"Optional: step 13 also computes this from Sothe and SoilGrids, so a literature value here is a cross-check rather than the only source."

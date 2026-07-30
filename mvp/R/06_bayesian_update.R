@@ -106,12 +106,66 @@ if (!is.na(n_neg) && n_neg > 0) {
 names(result$mean) <- "carbon_posterior_mean_kgm2"
 names(result$sd) <- "carbon_posterior_sd_kgm2"
 names(result$difference) <- "difference_from_prior_kgm2"
+names(result$info_frac) <- "core_info_fraction"
+names(result$sd_reduction) <- "sd_reduction_kgm2"
 
 writeRaster(result$mean, file.path(CFG$dir_current, "carbon_posterior_mean.tif"), overwrite = TRUE)
 writeRaster(result$sd, file.path(CFG$dir_current, "carbon_posterior_sd.tif"), overwrite = TRUE)
 writeRaster(result$difference, file.path(CFG$dir_current, "carbon_difference_from_prior.tif"), overwrite = TRUE)
+writeRaster(result$info_frac, file.path(CFG$dir_current, "core_info_fraction.tif"), overwrite = TRUE)
+writeRaster(result$sd_reduction, file.path(CFG$dir_current, "sd_reduction.tif"), overwrite = TRUE)
 
-msg("wrote carbon_posterior_mean.tif, carbon_posterior_sd.tif, carbon_difference_from_prior.tif")
+msg("wrote carbon_posterior_mean.tif, carbon_posterior_sd.tif, ",
+   "carbon_difference_from_prior.tif, core_info_fraction.tif, sd_reduction.tif")
+
+# ---- what the cores actually contributed, as numbers ------------------------
+# This is the table to quote when asked "how much did these eight cores add to
+# what was already known". Every figure in it is measured, not asserted.
+
+cell_km2 <- cellSize(result$mean, unit = "km")
+valid    <- !is.na(result$mean)
+gsum <- function(r) global(r, "sum", na.rm = TRUE)[1, 1]
+gmean <- function(r) global(r, "mean", na.rm = TRUE)[1, 1]
+
+aoi_km2   <- gsum(valid * cell_km2)
+inf       <- result$info_frac
+prior_mean_kgm2 <- gmean(prior_mean)
+post_mean_kgm2  <- gmean(result$mean)
+
+contribution <- data.frame(
+  metric = c(
+    "cores contributing to the update",
+    "mapped area with prior coverage (km2)",
+    "AOI mean carbon, PRIOR (kg C/m2)",
+    "AOI mean carbon, POSTERIOR (kg C/m2)",
+    "change in AOI mean (kg C/m2)",
+    "change in AOI mean (%)",
+    "AOI mean uncertainty, PRIOR (kg C/m2)",
+    "AOI mean uncertainty, POSTERIOR (kg C/m2)",
+    "uncertainty reduction (kg C/m2)",
+    "mean core information fraction (%)",
+    "area where cores supply >1% of the information (km2)",
+    "area where cores supply >10% of the information (km2)",
+    "area where the map moved more than 0.1 kg C/m2 (km2)"),
+  value = c(
+    nrow(cores),
+    round(aoi_km2, 1),
+    round(prior_mean_kgm2, 3),
+    round(post_mean_kgm2, 3),
+    round(post_mean_kgm2 - prior_mean_kgm2, 4),
+    round(100 * (post_mean_kgm2 / prior_mean_kgm2 - 1), 3),
+    round(CFG$bayes$prior_sd_kgm2, 2),
+    round(gmean(result$sd), 3),
+    round(CFG$bayes$prior_sd_kgm2 - gmean(result$sd), 3),
+    round(100 * gmean(inf), 3),
+    round(gsum((inf > 0.01) * cell_km2), 1),
+    round(gsum((inf > 0.10) * cell_km2), 1),
+    round(gsum((abs(result$difference) > 0.1) * cell_km2), 1))
+)
+write.csv(contribution, file.path(CFG$dir_current, "core_contribution.csv"), row.names = FALSE)
+msg("--- what the cores contributed ---")
+print(contribution, right = FALSE)
+msg("wrote core_contribution.csv")
 
 # Report with global(na.rm=TRUE) rather than minmax(), which returns NaN on a
 # raster carrying NoData.

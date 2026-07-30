@@ -72,7 +72,16 @@ bayes_update_raster <- function(prior_mean_r, prior_sd_r, cores,
   list(
     mean       = prior_mean_r + correction,
     sd         = sd_post,
-    difference = correction
+    difference = correction,
+    # THE MOST HONEST LAYER IN THE SET: at each pixel, the share of the
+    # posterior's precision that came from the community cores rather than from
+    # the published prior. 0 means "this pixel is entirely the published map";
+    # 1 would mean "entirely the cores". It maps exactly where the community
+    # measurement actually changed the answer, and across a study area sampled
+    # by eight points it is near zero almost everywhere -- which is the point.
+    info_frac  = tau_data / tau_post,
+    # How much the cores tightened the uncertainty, in the same units as the map.
+    sd_reduction = prior_sd_r - sd_post
   )
 }
 

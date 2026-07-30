@@ -51,31 +51,42 @@ posterior_sd   <- rast(file.path(CFG$dir_current, "carbon_posterior_sd.tif"))
 cores <- st_read(file.path(CFG$dir_current, "cores_clean.geojson"), quiet = TRUE)
 
 aoi_extent <- st_as_sfc(st_bbox(posterior_mean), crs = CFG$crs_geographic)
-hex_cellsize_m <- CFG$gee$scale_m * 40   # a few dozen pixels per hexagon
-hex_geom <- st_make_grid(st_transform(aoi_extent, CFG$crs_equal_area),
-                         cellsize = hex_cellsize_m, square = FALSE)
-hex <- st_transform(st_sf(hex_id = seq_along(hex_geom), geometry = hex_geom),
-                    CFG$crs_geographic)
 
-hex_mean <- terra::extract(posterior_mean, vect(hex), fun = mean, na.rm = TRUE)
-hex_sd   <- terra::extract(posterior_sd, vect(hex), fun = mean, na.rm = TRUE)
-hex$mean_carbon_kgm2 <- hex_mean[, 2]
-hex$mean_uncertainty_kgm2 <- hex_sd[, 2]
-hex$n_cores_within <- lengths(st_intersects(hex, cores))
-hex <- hex[!is.na(hex$mean_carbon_kgm2), ]
-
-# An empty hex layer means the posterior raster carries no data anywhere --
-# don't write a blank file and call it a deliverable.
-if (!nrow(hex)) {
-  stop("Hexagon layer is empty: carbon_posterior_mean.tif has no valid cells. ",
-      "Re-check step 6's coverage line -- if it reported NaN or 0%, the fusion ",
-      "produced nothing and this archive would be a blank map.")
+#' Build one hexagon reporting layer at a given cell size, with the posterior
+#' mean and uncertainty averaged inside each cell.
+build_hex <- function(cellsize_m) {
+  g <- st_make_grid(st_transform(aoi_extent, CFG$crs_equal_area),
+                    cellsize = cellsize_m, square = FALSE)
+  h <- st_transform(st_sf(hex_id = seq_along(g), geometry = g), CFG$crs_geographic)
+  h$mean_carbon_kgm2      <- terra::extract(posterior_mean, vect(h), fun = mean, na.rm = TRUE)[, 2]
+  h$mean_uncertainty_kgm2 <- terra::extract(posterior_sd,   vect(h), fun = mean, na.rm = TRUE)[, 2]
+  h$n_cores_within        <- lengths(st_intersects(h, cores))
+  h$hex_size_m            <- cellsize_m
+  h[!is.na(h$mean_carbon_kgm2), ]
 }
 
-st_write(hex, file.path(CFG$dir_current, "hex_carbon_layer.gpkg"),
-         delete_dsn = TRUE, quiet = TRUE)
-msg("wrote hex_carbon_layer.gpkg  (", nrow(hex), " hexagons at ",
-   hex_cellsize_m / 1000, " km)")
+hex_path <- file.path(CFG$dir_current, "hex_carbon_layer.gpkg")
+if (file.exists(hex_path)) unlink(hex_path)
+
+hex_counts <- integer(0)
+for (sz in CFG$hex_sizes_m) {
+  h <- build_hex(sz)
+  # An empty layer means the posterior raster carries no data anywhere -- don't
+  # write a blank file and call it a deliverable.
+  if (!nrow(h)) {
+    stop("Hexagon layer at ", sz, " m is empty: carbon_posterior_mean.tif has ",
+        "no valid cells. Re-check step 6's coverage line -- if it reported NaN ",
+        "or 0%, the fusion produced nothing and this archive would be blank.")
+  }
+  lyr <- sprintf("hex_%dm", sz)
+  st_write(h, hex_path, layer = lyr, append = file.exists(hex_path), quiet = TRUE)
+  hex_counts[lyr] <- nrow(h)
+  msg("  ", lyr, ": ", nrow(h), " hexagons")
+}
+# `hex` is kept for the metadata/empty check below; use the coarsest layer.
+hex <- h
+msg("wrote hex_carbon_layer.gpkg  (", length(CFG$hex_sizes_m), " scales: ",
+   paste0(CFG$hex_sizes_m, "m", collapse = ", "), ")")
 
 # ---- 2. export core points as GIS-ready GeoPackage -------------------------
 

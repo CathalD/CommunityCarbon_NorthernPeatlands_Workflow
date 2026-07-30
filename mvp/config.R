@@ -29,6 +29,17 @@ CFG <- list(
   dir_versions = file.path(.mvp_root, "outputs", "versions"),
   dir_figures = file.path(.mvp_root, "outputs", "current", "figures"),
 
+  # ---- hexagon reporting scales (step 07) -----------------------------------
+  # Three sizes sitting between the posterior raster grid (gee$scale_m, 100 m)
+  # and the 4 km first attempt, which read as too coarse. Step 07 writes one
+  # GeoPackage layer per size -- hex_500m, hex_1000m, hex_2000m -- so a single
+  # run gives every scale and you pick per audience.
+  #
+  # Going below ~500 m gets expensive fast: hexagon count scales as 1/size^2,
+  # so 500 m over this AOI is ~25,000 cells, 250 m would be ~100,000, and the
+  # zonal mean for each one is a separate raster extraction.
+  hex_sizes_m = c(500L, 1000L, 2000L),
+
   # ---- external comparison datasets (steps 08-10, an ADD-ON) ---------------
   # Steps 01-07 never read any of this. The comparison is a separate branch of
   # the workflow that answers "how do these cores sit against everything else
@@ -82,7 +93,33 @@ CFG <- list(
     gwl_wetland_codes = c(182L, 183L, 184L, 185L, 186L, 187L, 188L),
     # Points per Earth Engine request in step 09. ~11,500 profiles total, so
     # this is chunked rather than sent as one call.
-    gee_chunk_size = 1000L
+    gee_chunk_size = 1000L,
+
+    # ---- regional comparison (step 13) --------------------------------------
+    # Administrative boundaries, so no shapefile upload is needed.
+    gee_asset_gaul1 = "FAO/GAUL/2015/level1",   # provinces -> Ontario
+    gee_asset_gaul0 = "FAO/GAUL/2015/level0",   # countries -> Canada
+
+    # SoilGrids 2.0 built from concentration x bulk density rather than the
+    # packaged ocs_mean, so the integration matches the one applied to the cores:
+    #   (soc/10 g/kg) x (bdod/100 g/cm3) x thickness_cm / 100 = kg C/m2
+    gee_asset_soilgrids_soc  = "projects/soilgrids-isric/soc_mean",
+    gee_asset_soilgrids_bdod = "projects/soilgrids-isric/bdod_mean",
+    # SoilGrids depth bands and their thicknesses, cm, summing to 0-30.
+    soilgrids_bands = c("0-5cm", "5-15cm", "15-30cm"),
+    soilgrids_thick = c(5, 10, 15),
+
+    # Averaging a raster over Ontario or Canada at 30 m is neither affordable
+    # nor meaningful. 1 km is ample for a regional mean.
+    regional_scale_m = 1000L,
+
+    # "Coastal" for group A: CanPeat cores within this distance of permanent
+    # water, which along this shoreline means Hudson or James Bay.
+    coastal_buffer_km = 100,
+
+    # Published Canada-wide figures. NOT computed here -- fill this file in from
+    # the literature. Rows left blank are skipped rather than guessed at.
+    file_literature = file.path(.mvp_root, "data", "literature_values.csv")
   ),
 
   seed = 20260727L,

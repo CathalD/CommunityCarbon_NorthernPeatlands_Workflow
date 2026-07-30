@@ -24,7 +24,7 @@ steps <- c("01_clean_and_stocks.R", "01b_plot_profiles.R", "02_covariates.R",
           "06_bayesian_update.R", "07_version_and_export.R",
           "08_external_ingest.R", "09_external_ecosystem.R",
           "10_comparison_outputs.R", "11_context_figures.R",
-          "12_community_story.R")
+          "12_community_story.R", "13_regional_comparison.R")
 
 for (s in steps) {
   cat("\n", strrep("=", 78), "\n", sep = "")
