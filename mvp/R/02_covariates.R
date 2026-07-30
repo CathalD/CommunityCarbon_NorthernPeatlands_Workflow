@@ -31,6 +31,7 @@ source(file.path(.this_dir, "..", "config.R"))
 
 library(sf)
 library(rgee)
+library(terra)   # for the post-download band check
 library(dplyr)   # for the %>% pipe below
 
 msg("02  covariates + priors (Earth Engine)")
@@ -99,24 +100,41 @@ cop <- ee$ImageCollection(CFG$gee$asset_dem_copernicus)$select("DEM")$
 arctic <- ee$Image(CFG$gee$asset_dem_arctic)$select("elevation")
 dem_native <- ee$ImageCollection(list(cop, arctic))$mosaic()$rename("elevation")
 
-# PIN THE WORKING RESOLUTION BEFORE ANY TERRAIN OPERATION. This line is
-# load-bearing, not tidying. Earth Engine runs slope and focal operations at
-# the image's native scale unless told otherwise. ArcticDEM is 2 m, so a 2 km
-# focal radius on the native grid asks for a kernel a thousand pixels across
-# and Earth Engine refuses the request outright ("Reprojection output too
-# large"). Reprojecting to the analysis scale first makes the kernels the size
-# their names claim, and costs nothing scientifically here: this landscape has
-# metres of relief over tens of kilometres, so 2 m detail is not the signal.
+# PIN THE WORKING PROJECTION BEFORE ANY TERRAIN OPERATION, AND MAKE IT METRIC.
+#
+# Two separate reasons, both load-bearing:
+#
+#   SCALE. Earth Engine runs slope and focal operations at the image's native
+#   scale unless told otherwise. ArcticDEM is 2 m, so a 2 km focal radius on
+#   the native grid asks for a kernel a thousand pixels across and Earth Engine
+#   refuses the request outright ("Reprojection output too large").
+#
+#   UNITS. The projection must be METRIC, not geographic. In EPSG:4326 a pixel
+#   is measured in degrees, so ee$Terrain$slope() divides a rise in metres by a
+#   run in degrees and returns a number that is not a slope. EPSG:3979 (Canada
+#   Atlas Lambert) has metre units, so the terrain maths means what it says.
+#
+# Costs nothing scientifically: this landscape has metres of relief over tens
+# of kilometres, so 2 m detail is not the signal.
 dem <- dem_native$resample("bilinear")$
-  reproject(crs = CFG$gee$export_crs, scale = CFG$gee$scale_m)
+  reproject(crs = CFG$crs_equal_area, scale = CFG$gee$scale_m)
 
 slope <- ee$Terrain$slope(dem)$rename("slope_deg")
 
 # Topographic position: elevation minus the local mean, at two scales. On a
 # plain this flat, POSITION carries the peat-vs-mineral signal that absolute
 # elevation does not.
+#
+# Kernel radii in PIXELS, derived from the pinned scale -- NOT in metres.
+# Asking for metres leaves the metres-to-pixels conversion up to whatever
+# projection Earth Engine considers current, and if that projection is coarser
+# than the radius the kernel collapses to a single pixel: focalMean returns the
+# centre value and TPI comes out EXACTLY zero at every location. That is what
+# happened on the first run here, and it is also what the original workflow's
+# own covariate table shows (tpi_300m and tpi_2km are 0 for all eight cores).
 tpi <- function(img, radius_m, name) {
-  k <- ee$Kernel$circle(radius = radius_m, units = "meters")
+  radius_px <- max(1L, as.integer(round(radius_m / CFG$gee$scale_m)))
+  k <- ee$Kernel$circle(radius = radius_px, units = "pixels")
   img$subtract(img$focalMean(kernel = k))$rename(name)
 }
 tpi_small <- tpi(dem, CFG$gee$tpi_radii_m[["small"]], "tpi_300m")
@@ -170,26 +188,32 @@ predictors <- dem$
 band_names <- predictors$bandNames()$getInfo()
 msg(length(band_names), "-band covariate stack: ", paste(band_names, collapse = ", "))
 
-# Sample the stack AT THE CORES before spending minutes on the export. A band
-# that comes back NA here has no coverage over this AOI, and finding that out
-# now is far cheaper than finding it out in step 3.
-check <- tryCatch(
-  ee_extract(predictors, sf_as_ee(cores["core_id"]), scale = CFG$gee$scale_m,
-            fun = ee$Reducer$first(), sf = FALSE),
-  error = function(e) { msg("pre-export check skipped: ", conditionMessage(e)); NULL })
+#' Report bands that carry no usable signal at the cores. Run on the
+#' DOWNLOADED raster with terra rather than server-side: it needs no extra
+#' Earth Engine call, and cannot itself fail for API reasons.
+check_bands_at_cores <- function(tif_path, cores) {
+  chk <- terra::extract(terra::rast(tif_path), terra::vect(cores))
+  chk <- chk[, setdiff(names(chk), "ID"), drop = FALSE]
 
-if (!is.null(check)) {
-  band_cols <- intersect(band_names, names(check))
-  na_bands <- band_cols[vapply(check[band_cols], function(v) all(is.na(v)), logical(1))]
-  if (length(na_bands)) {
-    msg("WARNING: these bands are NA at EVERY core: ", paste(na_bands, collapse = ", "))
-    msg("  They have no coverage over this AOI. Fix the asset in config.R before ",
-       "continuing -- step 4 would drop them and you would be modelling on less ",
-       "than you think.")
-  } else {
-    msg("pre-export check: all ", length(band_cols),
-       " bands have values at all ", nrow(cores), " cores")
+  all_na <- names(chk)[vapply(chk, function(v) all(is.na(v)), logical(1))]
+  # A band identical at every core is just as useless to the model as an empty
+  # one, and it is the failure mode a metres-based focal kernel produces.
+  flat <- names(chk)[vapply(chk, function(v)
+    all(is.finite(v)) && length(unique(v)) == 1L, logical(1))]
+
+  if (length(all_na)) {
+    msg("WARNING: NA at EVERY core: ", paste(all_na, collapse = ", "))
+    msg("  No coverage over this AOI -- fix the asset in config.R.")
   }
+  if (length(flat)) {
+    msg("WARNING: identical value at every core: ", paste(flat, collapse = ", "))
+    msg("  Carries no information; step 4 will drop it as zero-variance.")
+  }
+  if (!length(all_na) && !length(flat)) {
+    msg("band check: all ", ncol(chk), " bands vary across the ",
+       nrow(cores), " cores")
+  }
+  invisible(chk)
 }
 
 #' Download an ee$Image to a local GeoTIFF.
@@ -205,6 +229,7 @@ download_ee_image <- function(img, dsn) {
 pred_path <- file.path(CFG$dir_current, "predictors.tif")
 download_ee_image(predictors, pred_path)
 msg("wrote ", pred_path)
+check_bands_at_cores(pred_path, cores)
 
 # ---- 3. published priors ---------------------------------------------------
 # Single-band, so no type-mixing possible, but cast anyway so every raster

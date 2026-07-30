@@ -86,6 +86,23 @@ result <- bayes_update_raster(
   max_influence_km = CFG$bayes$max_influence_km
 )
 
+# A carbon stock cannot be negative. Where a large negative residual sits over
+# a small prior value, the weighted correction can push a pixel below zero --
+# arithmetically fine, physically impossible, and indefensible in something
+# handed to a council. Clamp at zero, recompute the difference layer so it stays
+# consistent with the clamped mean, and say how many cells it touched: a big
+# number here means the residuals are fighting the prior hard enough that the
+# depth assumption (shallow_fraction_of_column) deserves another look.
+n_neg <- global(result$mean < 0, "sum", na.rm = TRUE)[1, 1]
+if (!is.na(n_neg) && n_neg > 0) {
+  n_valid_pre <- global(!is.na(result$mean), "sum", na.rm = TRUE)[1, 1]
+  msg("clamped ", as.integer(n_neg), " cell(s) (",
+     sprintf("%.2f%%", 100 * n_neg / n_valid_pre),
+     ") from negative to 0 kg C/m2 -- a negative carbon stock is impossible")
+  result$mean <- clamp(result$mean, lower = 0, values = TRUE)
+  result$difference <- result$mean - prior_mean
+}
+
 names(result$mean) <- "carbon_posterior_mean_kgm2"
 names(result$sd) <- "carbon_posterior_sd_kgm2"
 names(result$difference) <- "difference_from_prior_kgm2"

@@ -48,7 +48,7 @@ Rscript mvp/R/07_version_and_export.R
 ## The study area
 
 `mvp/data/aoi.geojson` is the coast-following polygon that defines the mapped
-extent (~9,700 km²). Step 02 uses it if present and only falls back to a
+extent (~5,400 km²). Step 02 uses it if present and only falls back to a
 buffered hull around the cores if it's missing, so **edit that file to change
 the mapping extent** — no code change needed. Step 02 stops with an error if
 any core falls outside it, since a core outside the AOI silently loses all its

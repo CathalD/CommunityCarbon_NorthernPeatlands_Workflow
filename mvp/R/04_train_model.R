@@ -104,19 +104,38 @@ cv_predictions <- map_dfr(folds$splits, function(split) {
 })
 
 cv_rmse <- rmse_vec(cv_predictions$truth, cv_predictions$estimate)
-cv_r2 <- tryCatch(rsq_vec(cv_predictions$truth, cv_predictions$estimate),
-                  error = function(e) NA_real_)
 null_rmse <- rmse_vec(cv_predictions$truth, rep(mean(model_frame$stock_kgm2),
                                                  nrow(cv_predictions)))
 
+# TWO different R-squareds, and the difference is not pedantic.
+#
+#   rsq_trad_vec  = 1 - SSE/SST. Variance actually explained. Goes NEGATIVE
+#                   when the model predicts worse than the mean. This is the
+#                   honest one and it is the one reported as the headline.
+#   rsq_vec       = squared Pearson correlation. Only asks whether predictions
+#                   move WITH the truth, ignoring whether they are the right
+#                   magnitude -- so a model can score a cheerful +0.34 here
+#                   while having worse RMSE than a flat mean. Reported second,
+#                   labelled, so the gap between them is visible rather than
+#                   flattering.
+cv_r2_trad <- tryCatch(rsq_trad_vec(cv_predictions$truth, cv_predictions$estimate),
+                       error = function(e) NA_real_)
+cv_r2_corr <- tryCatch(rsq_vec(cv_predictions$truth, cv_predictions$estimate),
+                       error = function(e) NA_real_)
+
 msg(sprintf("leave-one-core-out RMSE: %.3f kg/m2  (mean-only null: %.3f)",
            cv_rmse, null_rmse))
-msg(sprintf("leave-one-core-out R2:   %s",
-           if (is.na(cv_r2)) "NA (not enough variance in predictions)" else sprintf("%.3f", cv_r2)))
+msg(sprintf("leave-one-core-out R2 (variance explained): %s",
+           if (is.na(cv_r2_trad)) "NA" else sprintf("%+.3f", cv_r2_trad)))
+msg(sprintf("           ... vs squared correlation only: %s",
+           if (is.na(cv_r2_corr)) "NA" else sprintf("%+.3f", cv_r2_corr)))
 if (cv_rmse >= null_rmse) {
-  msg("NOTE: the model did not beat a plain mean-only null on this CV. ",
-     "With ", nrow(model_frame), " cores that is an expected result, not a bug -- ",
-     "read validation_metrics.csv before trusting the prediction raster in step 5.")
+  msg("VERDICT: the model does NOT beat a plain mean-only null. With ",
+     nrow(model_frame), " cores that is the expected outcome, not a bug.")
+  msg("  The prediction raster from step 5 is therefore weaker evidence than ",
+     "the Bayesian fusion in step 6, which falls back to the published prior ",
+     "wherever the cores say nothing. Read validation_metrics.csv before ",
+     "presenting carbon_prediction.tif to anyone.")
 }
 
 # ---- 2. final model, fit on everything -------------------------------------
@@ -130,10 +149,11 @@ final_model <- ranger(stock_kgm2 ~ ., data = model_frame,
 saveRDS(final_model, file.path(CFG$dir_current, "rf_model.rds"))
 
 metrics <- tibble(
-  metric = c("n_cores", "n_predictors", "loco_rmse_kgm2", "loco_r2",
+  metric = c("n_cores", "n_predictors", "loco_rmse_kgm2",
+            "loco_r2_variance_explained", "loco_r2_squared_correlation",
             "null_rmse_kgm2", "beats_null"),
-  value  = c(nrow(model_frame), length(predictor_cols), cv_rmse, cv_r2,
-            null_rmse, cv_rmse < null_rmse)
+  value  = c(nrow(model_frame), length(predictor_cols), cv_rmse,
+            cv_r2_trad, cv_r2_corr, null_rmse, cv_rmse < null_rmse)
 )
 write.csv(metrics, file.path(CFG$dir_current, "validation_metrics.csv"), row.names = FALSE)
 

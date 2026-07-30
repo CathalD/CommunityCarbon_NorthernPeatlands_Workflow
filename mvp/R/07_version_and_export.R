@@ -109,13 +109,13 @@ ensure_dir(version_dir)
 
 metadata <- data.frame(
   field = c("version", "date", "prior_source", "n_cores_used",
-           "loco_rmse_kgm2", "loco_r2", "beats_null",
+           "loco_rmse_kgm2", "loco_r2_variance_explained", "beats_null",
            "mean_uncertainty_kgm2", "prev_mean_uncertainty_kgm2",
            "area_meaningfully_updated_km2"),
   value = c(version_num, as.character(Sys.Date()), CFG$bayes$prior_source,
            nrow(residuals),
            metrics$value[metrics$metric == "loco_rmse_kgm2"],
-           metrics$value[metrics$metric == "loco_r2"],
+           metrics$value[metrics$metric == "loco_r2_variance_explained"],
            metrics$value[metrics$metric == "beats_null"],
            round(this_uncertainty, 3), round(prev_uncertainty, 3),
            round(area_updated_km2, 2))
