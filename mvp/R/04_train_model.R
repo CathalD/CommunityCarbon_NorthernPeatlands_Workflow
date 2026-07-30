@@ -46,16 +46,43 @@ id_cols <- c("core_id", "campaign", "latitude", "longitude", "lon_repaired",
             "core_depth_cm", "any_bd_flagged", "n_segments",
             "stock_is_lower_bound")
 predictor_cols <- setdiff(names(training), c(id_cols, "stock_kgm2", "geometry"))
+
+# Drop all-NA bands FIRST and by name. A band with no coverage over the AOI
+# arrives as all-NA; if it stayed in, complete.cases() below would discard
+# every core instead of every column, and the run would fail with a confusing
+# "0 rows" error rather than telling you which asset is wrong.
+all_na <- predictor_cols[sapply(training[predictor_cols], function(v) all(is.na(v)))]
+if (length(all_na)) {
+  msg("DROPPED ", length(all_na), " predictor(s) that are NA at every core: ",
+     paste(all_na, collapse = ", "))
+  msg("  Those bands have no coverage over this AOI -- see step 3's output.")
+  predictor_cols <- setdiff(predictor_cols, all_na)
+}
 predictor_cols <- predictor_cols[sapply(training[predictor_cols], is.numeric)]
 
-msg(nrow(training), " cores, ", length(predictor_cols), " candidate predictors: ",
-   paste(predictor_cols, collapse = ", "))
-
 model_frame <- training[, c("stock_kgm2", predictor_cols)]
+n_before <- nrow(model_frame)
 model_frame <- model_frame[complete.cases(model_frame), ]
-if (nrow(model_frame) < nrow(training)) {
-  msg("dropped ", nrow(training) - nrow(model_frame),
-     " core(s) with missing covariate values")
+if (nrow(model_frame) < n_before) {
+  msg("dropped ", n_before - nrow(model_frame),
+     " core(s) with a missing covariate value")
+}
+
+# A predictor that doesn't vary across the cores cannot explain anything, and
+# with a sample this small every wasted column costs real resolving power.
+sdev <- sapply(model_frame[predictor_cols], sd, na.rm = TRUE)
+constant <- names(sdev)[!is.finite(sdev) | sdev == 0]
+if (length(constant)) {
+  msg("dropped ", length(constant), " zero-variance predictor(s): ",
+     paste(constant, collapse = ", "))
+  predictor_cols <- setdiff(predictor_cols, constant)
+  model_frame <- model_frame[, c("stock_kgm2", predictor_cols)]
+}
+
+msg(nrow(model_frame), " cores, ", length(predictor_cols), " usable predictors: ",
+   paste(predictor_cols, collapse = ", "))
+if (!length(predictor_cols)) {
+  stop("No usable predictors remain -- nothing to fit. Check steps 2 and 3.")
 }
 
 set.seed(CFG$seed)

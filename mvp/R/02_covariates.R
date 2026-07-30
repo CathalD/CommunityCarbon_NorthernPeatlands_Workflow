@@ -69,7 +69,9 @@ season_filter <- function(coll) {
                                    max(CFG$gee$season_years), "year"))
 }
 
-elevation <- ee$Image(CFG$gee$asset_dem)$select(0)$rename("elevation")
+# GLO30 is an ImageCollection of tiles, so mosaic it into one image first.
+elevation <- ee$ImageCollection(CFG$gee$asset_dem)$select("DEM")$mosaic()$
+  rename("elevation")
 slope     <- ee$Terrain$slope(elevation)$rename("slope")
 
 s1 <- ee$ImageCollection(CFG$gee$asset_s1)$

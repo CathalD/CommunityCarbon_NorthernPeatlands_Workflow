@@ -104,6 +104,16 @@ Add any of these back deliberately once the pipeline is running smoothly
 and you understand every line — that was the explicit brief for this first
 pass, not a limitation to work around.
 
+## Start each run in a clean R session
+
+If you `source()` these from an R session that also has the original
+workflow's `R/` files loaded, you'll see masking warnings like
+`yardstick ... masked _by_ '.GlobalEnv': mae, metric_set, rmse` and
+`terra ... masked _by_ '.GlobalEnv': draw, zonal`. `.GlobalEnv` wins those
+conflicts, so the old workflow's functions would shadow the packages' —
+harmless as the code stands (it calls `rmse_vec()`, not `rmse()`), but it's
+a trap waiting to spring. Restart R before a run.
+
 ## If a step fails
 
 Each script's header comment lists its `INPUT`/`OUTPUT` files. Almost every

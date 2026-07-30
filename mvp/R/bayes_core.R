@@ -38,6 +38,15 @@ kernel_weight <- function(dist_km, length_scale_km, max_km) {
 #' @param length_scale_km,max_influence_km  kernel parameters
 bayes_update_raster <- function(prior_mean_r, prior_sd_r, cores,
                                 length_scale_km, max_influence_km) {
+  # A single non-finite residual would propagate NA through the weighted sum
+  # below and turn the ENTIRE output raster into NaN. Refuse rather than
+  # return a silently empty map -- callers should filter first and say why.
+  if (!nrow(cores) || any(!is.finite(cores$residual))) {
+    stop("bayes_update_raster(): every core must have a finite residual ",
+         "(got ", sum(!is.finite(cores$residual)), " non-finite of ",
+         nrow(cores), "). Filter them out before calling, and report which.",
+         call. = FALSE)
+  }
   if (is.numeric(prior_sd_r) && length(prior_sd_r) == 1) {
     prior_sd_r <- terra::setValues(prior_mean_r, prior_sd_r)
   }

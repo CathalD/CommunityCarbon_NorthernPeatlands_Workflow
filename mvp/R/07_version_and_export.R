@@ -64,9 +64,18 @@ hex$mean_uncertainty_kgm2 <- hex_sd[, 2]
 hex$n_cores_within <- lengths(st_intersects(hex, cores))
 hex <- hex[!is.na(hex$mean_carbon_kgm2), ]
 
+# An empty hex layer means the posterior raster carries no data anywhere --
+# don't write a blank file and call it a deliverable.
+if (!nrow(hex)) {
+  stop("Hexagon layer is empty: carbon_posterior_mean.tif has no valid cells. ",
+      "Re-check step 6's coverage line -- if it reported NaN or 0%, the fusion ",
+      "produced nothing and this archive would be a blank map.")
+}
+
 st_write(hex, file.path(CFG$dir_current, "hex_carbon_layer.gpkg"),
          delete_dsn = TRUE, quiet = TRUE)
-msg("wrote hex_carbon_layer.gpkg  (", nrow(hex), " hexagons)")
+msg("wrote hex_carbon_layer.gpkg  (", nrow(hex), " hexagons at ",
+   hex_cellsize_m / 1000, " km)")
 
 # ---- 2. export core points as GIS-ready GeoPackage -------------------------
 
@@ -87,9 +96,11 @@ this_uncertainty <- global(posterior_sd, "mean", na.rm = TRUE)[1, 1]
 
 area_updated_km2 <- {
   diff_r <- rast(file.path(CFG$dir_current, "carbon_difference_from_prior.tif"))
-  cell_km2 <- prod(res(diff_r)) * 111 * 111  # rough deg->km conversion at this latitude
-  meaningfully_changed <- abs(diff_r) > 0.1  # kg/m2, an arbitrary "visible change" threshold
-  global(meaningfully_changed, "sum", na.rm = TRUE)[1, 1] * cell_km2
+  # cellSize() gives true per-cell ground area. A flat degrees->km factor is
+  # wrong here: at 56N one degree of longitude spans ~62 km, not 111, so a
+  # squared-111 conversion overstates the area by roughly 1.8x.
+  changed <- abs(diff_r) > 0.1   # kg/m2 -- the "visibly different" threshold
+  global(changed * cellSize(diff_r, unit = "km"), "sum", na.rm = TRUE)[1, 1]
 }
 
 version_num <- next_version_number(CFG$dir_versions)

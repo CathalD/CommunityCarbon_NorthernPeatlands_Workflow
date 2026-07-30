@@ -44,11 +44,22 @@ training <- cores %>%
   st_drop_geometry() %>%
   bind_cols(extracted %>% select(-ID))
 
-n_incomplete <- sum(!complete.cases(training %>% select(names(predictors))))
-if (n_incomplete > 0) {
-  msg("WARNING: ", n_incomplete, " core(s) have at least one NA covariate ",
-     "(likely a core sits outside the covariate raster's coverage). ",
-     "These rows are kept but will be dropped by ranger at fit time.")
+# Report NAs PER BAND, not just per core. A band that is NA at every core has
+# no coverage over this AOI at all -- a wrong-asset problem, not a data gap --
+# and that distinction is invisible in a per-core count.
+na_by_band <- sapply(training[names(predictors)], function(v) sum(is.na(v)))
+if (any(na_by_band > 0)) {
+  msg("covariate bands with missing values at one or more cores:")
+  for (b in names(na_by_band)[na_by_band > 0]) {
+    flag <- if (na_by_band[[b]] == nrow(training)) "  <-- NA AT EVERY CORE" else ""
+    msg(sprintf("   %-18s %d of %d cores%s", b, na_by_band[[b]], nrow(training), flag))
+  }
+  if (any(na_by_band == nrow(training))) {
+    msg("A band that is NA at EVERY core has no coverage over this AOI. Check ",
+       "that asset's spatial domain in the Earth Engine catalogue and swap it ",
+       "in config.R -- step 4 will drop it, so you would lose that predictor ",
+       "silently otherwise.")
+  }
 }
 
 write.csv(training, file.path(CFG$dir_current, "training_data.csv"), row.names = FALSE)

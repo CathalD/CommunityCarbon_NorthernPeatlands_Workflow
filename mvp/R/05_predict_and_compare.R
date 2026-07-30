@@ -123,4 +123,13 @@ write.csv(residuals, file.path(CFG$dir_current, "prediction_residuals.csv"), row
 msg("wrote prediction_residuals.csv")
 print(residuals)
 
+n_na <- sum(!is.finite(residuals$residual))
+if (n_na > 0) {
+  msg("WARNING: ", n_na, " core(s) have NO prior value at their location: ",
+     paste(residuals$core_id[!is.finite(residuals$residual)], collapse = ", "))
+  msg("  The published map is NoData there (open water, or ground outside a ",
+     "peat-specific product's mask). Step 6 will exclude these cores from the ",
+     "fusion -- they cannot correct a prior that says nothing.")
+}
+
 msg("05 complete")

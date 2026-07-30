@@ -52,7 +52,13 @@ CFG <- list(
     # scripts/03_gee_covariates.R in the original repo for the full
     # rationale) plus one moderate one -- add more back later if the model
     # needs them.
-    asset_dem       = "UMN/PGC/ArcticDEM/V3/2m_mosaic",
+    # Copernicus GLO30, NOT ArcticDEM. ArcticDEM covers land north of 60N
+    # (plus Alaska, Greenland, Kamchatka); Fort Severn is at 56N and falls
+    # OUTSIDE it, so ArcticDEM returns all-NoData here -- silently costing you
+    # elevation and slope, which are the strongest predictors in a landscape
+    # where centimetres of relief decide peat vs. mineral. GLO30 covers
+    # 60S-85N. This is an ImageCollection, so step 02 mosaics it.
+    asset_dem       = "COPERNICUS/DEM/GLO30",
     asset_s1        = "COPERNICUS/S1_GRD",
     asset_s2        = "COPERNICUS/S2_SR_HARMONIZED",
     asset_jrc_water = "JRC/GSW1_4/GlobalSurfaceWater",
