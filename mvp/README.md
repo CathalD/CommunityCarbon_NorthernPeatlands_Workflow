@@ -54,7 +54,15 @@ the mapping extent** — no code change needed. Step 02 stops with an error if
 any core falls outside it, since a core outside the AOI silently loses all its
 covariates.
 
-Once you trust the whole chain, `Rscript mvp/run_all.R` runs all seven in
+Then the external-comparison add-on:
+
+```bash
+Rscript mvp/R/08_external_ingest.R       # no GEE needed
+Rscript mvp/R/09_external_ecosystem.R    # needs GEE, ~11,500 points, chunked
+Rscript mvp/R/10_comparison_outputs.R    # figures + GeoPackage
+```
+
+Once you trust the whole chain, `Rscript mvp/run_all.R` runs everything in
 order.
 
 Every step reads from and writes to `mvp/outputs/current/` — that folder is
@@ -86,6 +94,45 @@ always "the latest state." Step 7 archives a full copy of it into
 3. Run steps 01–07 again. Step 5 will now load `carbon_map_v1`'s posterior
    as the prior instead of Li et al., and step 6 fuses in only the new
    cores' residuals against it. Step 7 writes `carbon_map_v2/`.
+
+## The external comparison (steps 08–10, an add-on)
+
+Steps 01–07 produce the map. Steps 08–10 answer a different question — how do
+these eight cores sit against everything else that has been measured — and
+nothing in 01–07 depends on them.
+
+Four databases, harmonised onto one schema in step 08:
+
+| Dataset | Profiles | Layers | What it is |
+|---|---|---|---|
+| CanPeat | 1,217 | 37,072 | Canadian peatlands |
+| NPDB | 9,017 | 48,372 | AAFC National Pedon Database — the only source with a mineral/organic flag |
+| Janousek | 1,284 | 23,018 | US Pacific + Gulf tidal wetlands |
+| WOSIS Canada | 29 | 124 | Canadian subset only |
+
+**The global WOSIS table is deliberately excluded.** It is 14,596 profiles, 92%
+United States, and would swamp every comparison with irrelevant geography.
+
+**Two stock columns, never interchangeable.** `stock_kgm2_total` covers
+whatever depth each profile actually reached (CanPeat's median is 243 cm; ours
+is 30 cm). `stock_kgm2_0_30` covers 0–30 cm only, integrated from the layers
+with partial layers apportioned by overlap. Comparing our 30 cm total against a
+243 cm total is a category error, so both exist and every figure says which it
+uses.
+
+For the GeoPackage this matters for symbology: size-by-`stock_kgm2_total` makes
+our cores (3–14) nearly invisible beside CanPeat (median 119), not because they
+hold less carbon but because they are a tenth of the depth. Use
+`stock_kgm2_0_30` for a like-for-like size comparison.
+
+### The finding
+
+Inside the Hudson & James Bay Lowlands, across all four databases combined:
+**86 external profiles, and every one of them is organic.** Zero mineral soil
+profiles. The nearest profile anywhere with a complete, comparable 0–30 cm
+stock is **700 km away**. Step 08 recomputes these numbers on every run and
+writes them to `narrative_stats.csv`, so anything quoted from them is traceable
+rather than remembered.
 
 ## Known simplifications (intentional, for this first pass)
 

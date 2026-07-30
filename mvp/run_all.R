@@ -16,9 +16,14 @@
 # really lives via an env var, which the step's bootstrap checks first.
 Sys.setenv(MVP_R_DIR = file.path(.this_dir, "R"))
 
+# Steps 01-07 are the mapping pipeline. 08-10 are the external-comparison
+# ADD-ON: they read the mapping pipeline's outputs but nothing in 01-07 depends
+# on them, so they can be skipped entirely without affecting the map.
 steps <- c("01_clean_and_stocks.R", "01b_plot_profiles.R", "02_covariates.R",
           "03_training_data.R", "04_train_model.R", "05_predict_and_compare.R",
-          "06_bayesian_update.R", "07_version_and_export.R")
+          "06_bayesian_update.R", "07_version_and_export.R",
+          "08_external_ingest.R", "09_external_ecosystem.R",
+          "10_comparison_outputs.R")
 
 for (s in steps) {
   cat("\n", strrep("=", 78), "\n", sep = "")

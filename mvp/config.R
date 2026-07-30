@@ -29,6 +29,62 @@ CFG <- list(
   dir_versions = file.path(.mvp_root, "outputs", "versions"),
   dir_figures = file.path(.mvp_root, "outputs", "current", "figures"),
 
+  # ---- external comparison datasets (steps 08-10, an ADD-ON) ---------------
+  # Steps 01-07 never read any of this. The comparison is a separate branch of
+  # the workflow that answers "how do these cores sit against everything else
+  # that has been measured", not part of producing the map.
+  ext = list(
+    # Regional boundary for the comparison statistics. Matches the extent of
+    # Li et al. 2025 but clips by REGION rather than by peat presence, so
+    # mineral ground inside the lowlands counts -- which is the whole point.
+    file_hbl = file.path(.mvp_root, "data", "hbl_boundary.geojson"),
+
+    # CanPeat. Raw layer table; profiles are derived from it here rather than
+    # read from a pre-summarised file, so every dataset's profile totals are
+    # integrated the same way.
+    file_canpeat_layers = file.path(.mvp_root, "data", "peat_layers.csv"),
+
+    # Janousek: US Pacific and Gulf coast tidal wetlands. Already harmonised.
+    file_janousek_layers = file.path(.mvp_root, "data", "janousek_layers.csv"),
+
+    # WOSIS. CANADA SUBSET ONLY -- 29 profiles, 124 layers, and that is all the
+    # WOSIS data available here. The 14,596-profile global table in
+    # combined_profiles.csv is deliberately NOT used: it is 92% United States
+    # and would swamp every comparison with irrelevant geography.
+    file_wosis_layers   = file.path(.mvp_root, "data", "wosis_layers_canada.csv"),
+    file_wosis_profiles = file.path(.mvp_root, "data", "wosis_profiles_canada.csv"),
+
+    # AAFC National Pedon Database, already QC'd by the original workflow.
+    # The one source with a mineral/organic flag and a standardised 0-30 cm
+    # stock, so it carries most of the mineral-soil comparison.
+    file_npdb_layers   = file.path(dirname(.mvp_root), "data", "raw",
+                                   "National Pedon Database", "outputs_npdb",
+                                   "npdb_carbon_samples.csv"),
+    file_npdb_profiles = file.path(dirname(.mvp_root), "data", "raw",
+                                   "National Pedon Database", "outputs_npdb",
+                                   "npdb_carbon_cores.csv"),
+
+    # Organic-soil threshold, % organic carbon in the surface layer. Used only
+    # for datasets carrying no organic/mineral flag of their own (Janousek,
+    # and WOSIS where organic_surface is absent). 17% C is the conventional
+    # line, being roughly the 30% organic matter threshold x 0.58.
+    organic_orgc_pct = 17,
+
+    # Distance rings from Fort Severn, km, for the data-gap figure.
+    rings_km = c(100, 200, 300, 500, 1000, 2000),
+
+    # Ecosystem class layers sampled in step 09. Asset ids and the wetland
+    # class codes come from the original workflow's config.R.
+    gee_asset_gwl_fcs30  = "projects/sat-io/open-datasets/GWL_FCS30",
+    gee_asset_worldcover = "ESA/WorldCover/v200",
+    # 180 non-wetland | 181 permanent water | 182 swamp | 183 marsh
+    # 184 flooded flat | 185 saline | 186 mangrove | 187 salt marsh | 188 tidal flat
+    gwl_wetland_codes = c(182L, 183L, 184L, 185L, 186L, 187L, 188L),
+    # Points per Earth Engine request in step 09. ~11,500 profiles total, so
+    # this is chunked rather than sent as one call.
+    gee_chunk_size = 1000L
+  ),
+
   seed = 20260727L,
 
   # ---- site -----------------------------------------------------------------
