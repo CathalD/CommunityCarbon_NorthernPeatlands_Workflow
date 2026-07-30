@@ -1,0 +1,7 @@
+"metric","value"
+"n_cores",8
+"n_predictors",7
+"loco_rmse_kgm2",4.25318189486579
+"loco_r2",0.344379687503658
+"null_rmse_kgm2",3.65410275486073
+"beats_null",0

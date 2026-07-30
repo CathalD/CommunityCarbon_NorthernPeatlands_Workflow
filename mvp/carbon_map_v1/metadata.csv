@@ -1,0 +1,11 @@
+"field","value"
+"version","1"
+"date","2026-07-30"
+"prior_source","external"
+"n_cores_used","8"
+"loco_rmse_kgm2","4.25318189486579"
+"loco_r2","0.344379687503658"
+"beats_null","0"
+"mean_uncertainty_kgm2","32.7"
+"prev_mean_uncertainty_kgm2",NA
+"area_meaningfully_updated_km2","1076.64"
