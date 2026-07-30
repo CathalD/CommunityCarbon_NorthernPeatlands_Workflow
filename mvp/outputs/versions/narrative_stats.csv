@@ -1,0 +1,18 @@
+statistic,value
+our cores,8
+our mineral cores,5
+external profiles harmonised,11547
+external profiles inside the Hudson & James Bay Lowlands,86
+  of which MINERAL,0
+  of which organic,86
+external profiles within 100 km of Fort Severn,0
+external profiles within 200 km of Fort Severn,3
+external profiles within 300 km of Fort Severn,27
+external profiles within 500 km of Fort Severn,182
+external profiles within 1000 km of Fort Severn,2105
+external profiles within 2000 km of Fort Severn,8462
+nearest external profile of any kind (km),106.3
+nearest external profile with a complete 0-30 cm stock (km),106.3
+nearest MINERAL external profile with a complete 0-30 cm stock (km),632.3
+"external profiles with a complete 0-30 cm stock, nationally",3281
+  of which mineral,1440
