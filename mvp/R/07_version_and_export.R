@@ -50,18 +50,45 @@ posterior_mean <- rast(file.path(CFG$dir_current, "carbon_posterior_mean.tif"))
 posterior_sd   <- rast(file.path(CFG$dir_current, "carbon_posterior_sd.tif"))
 cores <- st_read(file.path(CFG$dir_current, "cores_clean.geojson"), quiet = TRUE)
 
-aoi_extent <- st_as_sfc(st_bbox(posterior_mean), crs = CFG$crs_geographic)
+# Grid over the AOI POLYGON, not the raster's bounding box. The polygon is
+# ~5,400 km2; its bounding box is nearly four times that, and every extra
+# hexagon costs a zonal statistic. Fall back to the bbox only if step 02's AOI
+# file is missing.
+aoi_path <- file.path(CFG$dir_current, "aoi.geojson")
+aoi_poly <- if (file.exists(aoi_path)) {
+  st_union(st_geometry(st_read(aoi_path, quiet = TRUE)))
+} else {
+  msg("no aoi.geojson; falling back to the raster bounding box (more hexagons)")
+  st_as_sfc(st_bbox(posterior_mean), crs = CFG$crs_geographic)
+}
 
 #' Build one hexagon reporting layer at a given cell size, with the posterior
 #' mean and uncertainty averaged inside each cell.
+#'
+#' RASTERIZE THEN zonal(), NOT extract() PER POLYGON. terra::extract() with a
+#' summary function walks the raster once per polygon, so at 500 m over this AOI
+#' it is tens of thousands of passes and effectively hangs. rasterize() writes
+#' the hexagon id into the raster grid once, and zonal() then computes every
+#' hexagon's mean in a single pass.
 build_hex <- function(cellsize_m) {
-  g <- st_make_grid(st_transform(aoi_extent, CFG$crs_equal_area),
-                    cellsize = cellsize_m, square = FALSE)
-  h <- st_transform(st_sf(hex_id = seq_along(g), geometry = g), CFG$crs_geographic)
-  h$mean_carbon_kgm2      <- terra::extract(posterior_mean, vect(h), fun = mean, na.rm = TRUE)[, 2]
-  h$mean_uncertainty_kgm2 <- terra::extract(posterior_sd,   vect(h), fun = mean, na.rm = TRUE)[, 2]
-  h$n_cores_within        <- lengths(st_intersects(h, cores))
-  h$hex_size_m            <- cellsize_m
+  aoi_ea <- st_transform(aoi_poly, CFG$crs_equal_area)
+  g <- st_make_grid(aoi_ea, cellsize = cellsize_m, square = FALSE)
+  h <- st_sf(hex_id = seq_along(g), geometry = g)
+  # Drop hexagons that never touch the study area before doing any raster work.
+  h <- h[lengths(st_intersects(h, aoi_ea)) > 0, ]
+  h <- st_transform(h, CFG$crs_geographic)
+  msg("    ", cellsize_m, " m: ", nrow(h), " candidate hexagons over the AOI")
+
+  hz <- terra::rasterize(vect(h), posterior_mean, field = "hex_id")
+  zm <- terra::zonal(posterior_mean, hz, fun = "mean", na.rm = TRUE)
+  zs <- terra::zonal(posterior_sd,   hz, fun = "mean", na.rm = TRUE)
+  names(zm) <- c("hex_id", "mean_carbon_kgm2")
+  names(zs) <- c("hex_id", "mean_uncertainty_kgm2")
+
+  h <- merge(h, zm, by = "hex_id", all.x = TRUE)
+  h <- merge(h, zs, by = "hex_id", all.x = TRUE)
+  h$n_cores_within <- lengths(st_intersects(h, cores))
+  h$hex_size_m     <- cellsize_m
   h[!is.na(h$mean_carbon_kgm2), ]
 }
 
@@ -83,8 +110,6 @@ for (sz in CFG$hex_sizes_m) {
   hex_counts[lyr] <- nrow(h)
   msg("  ", lyr, ": ", nrow(h), " hexagons")
 }
-# `hex` is kept for the metadata/empty check below; use the coarsest layer.
-hex <- h
 msg("wrote hex_carbon_layer.gpkg  (", length(CFG$hex_sizes_m), " scales: ",
    paste0(CFG$hex_sizes_m, "m", collapse = ", "), ")")
 
