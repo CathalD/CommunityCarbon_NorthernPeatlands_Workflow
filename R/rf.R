@@ -336,6 +336,60 @@ rf_importance <- function(x, y, group, n_perm = 10L, n_null = 50L,
   out
 }
 
+# ---- covariate hygiene --------------------------------------------------------
+
+#' Identify class-code layers that must never reach a regression. Pure.
+#'
+#' A land-cover or wetland layer stores arbitrary integers. A forest splitting
+#' on "class code <= 183.5" is splitting on the order the codes happened to be
+#' assigned, and nothing downstream would question the result -- it looks like
+#' any other covariate in the importance table.
+#'
+#' The ring-fence is by NAME, and names change: this workflow's Earth Engine
+#' export was renamed `gwl_fcs30` -> `gwl_class` between runs, and a hardcoded
+#' exclusion list silently stopped matching. So the check is done twice. Layers
+#' matching `patterns` are excluded, and any OTHER layer whose name suggests it
+#' is categorical is returned in `suspected` for the caller to report. A rename
+#' then produces a loud warning rather than a class code in a regression.
+#'
+#' @param nms covariate names.
+#' @param patterns regexes for names known to be categorical.
+#' @param hint regex for names that merely LOOK categorical.
+#' @return list(categorical, suspected, numeric).
+ringfence_categorical <- function(nms,
+                                  patterns = c("worldcover", "landcover",
+                                               "^gwl_", "_class$", "^class_",
+                                               "wetland"),
+                                  hint = "class|cover|categor|type|label|code") {
+  is_cat <- Reduce(`|`, lapply(patterns, function(p) grepl(p, nms)),
+                   init = rep(FALSE, length(nms)))
+  looks  <- grepl(hint, nms, ignore.case = TRUE)
+  list(categorical = nms[is_cat],
+       suspected   = nms[looks & !is_cat],
+       numeric     = nms[!is_cat])
+}
+
+#' Choose a prior anchor layer by preference order, matching on PATTERN.
+#'
+#' Returns the first preference with enough finite values to be usable, plus
+#' the reason. Never falls through silently: if nothing matches, the caller is
+#' told which layers were present so the preference list can be corrected.
+#' Pure.
+pick_prior_column <- function(d, preferences, min_finite = 3L) {
+  present <- names(d)[vapply(d, is.numeric, logical(1))]
+  for (p in preferences) {
+    hits <- grep(p, present, value = TRUE)
+    for (h in hits) {
+      if (sum(is.finite(d[[h]])) >= min_finite) {
+        return(list(column = h, pattern = p, n_finite = sum(is.finite(d[[h]])),
+                    considered = present))
+      }
+    }
+  }
+  list(column = NA_character_, pattern = NA_character_, n_finite = 0L,
+       considered = present)
+}
+
 # ---- spatial cross-validation -------------------------------------------------
 
 #' Leave-one-core-out with a SPATIAL EXCLUSION BUFFER.

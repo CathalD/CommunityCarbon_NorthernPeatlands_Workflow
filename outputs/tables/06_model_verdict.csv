@@ -1,0 +1,7 @@
+"criterion","value"
+"cross-validated predictions beat the observed mean (r2_cv > 0)","YES (r2_cv +0.457)"
+"lowers RMSE against a like-for-like cross-validated null","YES (skill +0.355)"
+"transfers across strata (leave-one-stratum-out r2_cv > 0)","NO (r2_cv -4.234)"
+"n cores","8"
+"candidates screened","17"
+"RECOMMENDED FOR MAPPING","NO"

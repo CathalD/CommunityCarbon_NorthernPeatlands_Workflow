@@ -104,7 +104,18 @@ if (nrow(dat) < nrow(y_tbl)) {
 # Ring-fence what the model may see. AlphaEarth embedding bands and the
 # categorical stratum layer are excluded here, for the reasons set out in 03.
 embed_cols <- grep("^A[0-9]{2}$", names(dat), value = TRUE)
-excluded   <- c("worldcover", embed_cols)
+# Categorical layers are matched by PATTERN, not by a literal name. The Earth
+# Engine export was renamed `gwl_fcs30` -> `gwl_class` between runs, and the
+# literal exclusion list here silently stopped matching -- which is how a
+# wetland CLASS CODE came third in the covariate ranking below, indistinguish-
+# able from a real predictor. See R/rf.R:ringfence_categorical().
+.ring <- ringfence_categorical(setdiff(names(dat), embed_cols),
+                               patterns = CFG$step2$categorical_patterns)
+excluded   <- c(.ring$categorical, embed_cols)
+if (length(.ring$suspected)) {
+  log_warn("layer names that look categorical but are NOT excluded: ",
+           paste(.ring$suspected, collapse = ", "))
+}
 candidates <- setdiff(names(dat),
                       c("core_id", "campaign", "stock_kgm2",
                         "latitude", "longitude", excluded))
@@ -117,8 +128,9 @@ candidates <- candidates[keep]
 
 log_info(length(candidates), " candidate predictors after screening")
 log_info("EXCLUDED from the model by design: ",
-         length(embed_cols), " AlphaEarth embedding bands, ",
-         "plus the categorical worldcover layer")
+         length(embed_cols), " AlphaEarth embedding bands, plus ",
+         length(.ring$categorical), " categorical layer(s): ",
+         paste(.ring$categorical, collapse = ", "))
 log_info("  64 embedding dimensions on 8 observations would fit anything and ",
          "generalise to nothing; the embedding is used for the extrapolation ",
          "diagnostic below instead")

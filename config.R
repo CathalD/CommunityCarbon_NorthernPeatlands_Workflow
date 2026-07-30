@@ -355,7 +355,22 @@ CFG <- local({
       # the script after the numbers come back.
       require_loco_r2   = 0,    # must beat the observed mean, held out
       require_loso_r2   = 0,    # must transfer between peat and mineral
-      require_beat_prior = TRUE # must beat simply handing over the published map
+      require_beat_prior = TRUE, # must beat simply handing over the published map
+
+      # Layers that store CLASS CODES and must never reach a regression. These
+      # are patterns, not literal names, because the Earth Engine export was
+      # renamed `gwl_fcs30` -> `gwl_class` between runs and a literal list
+      # silently stopped matching -- which put a wetland class code third in
+      # 06's covariate ranking, where it looked like an ordinary predictor.
+      categorical_patterns = c("worldcover", "landcover", "^gwl_", "_class$",
+                               "^class_", "wetland"),
+
+      # Prior anchor for candidate C and benchmark P, in preference order and
+      # matched as patterns for the same reason. Sothe's 0-30 cm layer is the
+      # only like-for-like depth support; SoilGrids is the fallback. Li is
+      # NEVER an anchor: it is a full peat column, and 04 bars it from any
+      # 0-30 cm comparison.
+      prior_preference = c("sothe.*0_30", "soilgrids.*0_30")
     ),
 
     # ---- Bayesian map (script 11) -----------------------------------------

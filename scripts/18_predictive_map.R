@@ -160,8 +160,21 @@ log_step("18b  COVARIATE STACK")
 # numeric predictors -- a forest splitting on class code 186 versus 187 is
 # splitting on an arbitrary integer.
 embed_cols <- grep("^A[0-9]{2}$", names(covars), value = TRUE)
-categorical <- intersect(c("worldcover", "gwl_fcs30", "gwl_wetland"), names(covars))
 id_cols <- c("core_id", "campaign", "latitude", "longitude")
+
+rf_ring <- ringfence_categorical(setdiff(names(covars), c(id_cols, embed_cols)),
+                                 patterns = CFG$step2$categorical_patterns)
+categorical <- rf_ring$categorical
+if (length(rf_ring$suspected)) {
+  log_warn("These layer names LOOK categorical but are not ring-fenced: ",
+           paste(rf_ring$suspected, collapse = ", "))
+  log_warn("  If any of them stores class codes, add a pattern to ",
+           "CFG$step2$categorical_patterns. A forest splitting on ")
+  log_warn("  'class code <= 183.5' is splitting on the order the codes were ",
+           "assigned, and the importance table would not show it.")
+}
+log_ok("ring-fenced as categorical: ",
+       if (length(categorical)) paste(categorical, collapse = ", ") else "(none)")
 
 env_cov <- setdiff(names(covars), c(id_cols, embed_cols, categorical))
 env_cov <- env_cov[vapply(covars[env_cov], is.numeric, logical(1))]
@@ -274,18 +287,21 @@ pred_forest <- function(m, nd) predict_rf(m, nd)
 # and is not comparable without a depth assumption, which is exactly the point
 # 04 audits. So Sothe is preferred, SoilGrids second, and Li is not used as an
 # anchor at all.
-pick_prior <- function(d) {
-  for (cand in c("sothe_sc_0_30_kgm2", "soilgrids_ocs_0_30_kgm2")) {
-    if (cand %in% names(d) && sum(is.finite(d[[cand]])) >= 3L) return(cand)
-  }
-  NA_character_
-}
-prior_col <- if (have_ref) pick_prior(frames[[verdict_window]]) else NA_character_
+pp <- if (have_ref) {
+  pick_prior_column(frames[[verdict_window]], CFG$step2$prior_preference)
+} else list(column = NA_character_, considered = character(0))
+prior_col <- pp$column
 if (!is.na(prior_col)) {
-  log_info("prior anchor: ", prior_col)
+  log_ok("prior anchor: ", prior_col, "  (matched '", pp$pattern, "', ",
+         pp$n_finite, " finite values at the cores)")
 } else if (have_ref) {
-  log_warn("no like-for-like 0-30 cm published layer has enough finite values ",
-           "at the cores; the prior benchmark and candidate C are unavailable.")
+  log_warn("NO like-for-like 0-30 cm published layer was found.")
+  log_warn("  preference patterns: ",
+           paste(CFG$step2$prior_preference, collapse = ", "))
+  log_warn("  numeric columns present: ",
+           paste(pp$considered, collapse = ", "))
+  log_warn("  The prior benchmark P and candidate C are both unavailable, ",
+           "which removes the most important comparison in this script.")
 }
 
 # A "fit" for the prior benchmark is just the identity on the prior column --
@@ -332,9 +348,27 @@ if (is.null(buf_km)) buf_km <- ls_km
 log_info(sprintf("distance length scale %.2f km; spatial CV buffer %.2f km",
                  ls_km, buf_km))
 
+# Candidate S: the design-based stratum mean, i.e. Product 2 from script 05.
+# No covariate is fitted; each core is predicted by the mean of the OTHER cores
+# in its own stratum. It is in the competition because it is the only surface
+# here that makes no claim about a relationship -- it claims only that peat
+# ground resembles peat ground. When a held-out stratum has no training cores
+# at all it falls back to the overall training mean, which is the honest
+# behaviour and is what makes it scoreable under leave-one-stratum-out.
+fit_stratum <- function(x, y) {
+  m <- tapply(y, x$campaign, mean, na.rm = TRUE)
+  list(means = m, overall = mean(y, na.rm = TRUE))
+}
+pred_stratum <- function(m, nd) {
+  v <- as.numeric(m$means[as.character(nd$campaign)])
+  ifelse(is.finite(v), v, m$overall)
+}
+
 candidates <- list(
   N = list(label = "NULL: observed mean",
            cols = env_cov, fit = fit_null, pred = predict_null),
+  S = list(label = "S: stratum mean (design-based; Product 2 from 05)",
+           cols = c("campaign"), fit = fit_stratum, pred = pred_stratum),
   A = list(label = "A: random forest on environmental covariates",
            cols = env_cov, fit = fit_forest, pred = pred_forest)
 )
@@ -352,6 +386,56 @@ if (!is.na(prior_col)) {
 log_info(length(candidates), " candidates: ",
          paste(names(candidates), collapse = ", "))
 
+# --- ANCHOR VALIDITY GATE ----------------------------------------------------
+#
+# The pre-registered fallback says: if nothing clears the bar, deliver C,
+# because C returns the published map wherever the cores are silent. That is a
+# safe failure mode ONLY IF the published map is approximately right. Nothing
+# had tested that when the rule was written, so it is tested here, against the
+# cores, before C is allowed to be the fallback.
+#
+# The test is deliberately crude, because it is guarding against a gross error
+# rather than estimating one: is the anchor's bias at the cores larger than the
+# cores' own mean? A map that is wrong by more than the entire quantity being
+# mapped cannot be described to a council as a conservative default.
+anchor_ok <- NA
+anchor_note <- "no anchor available"
+if (!is.na(prior_col)) {
+  dv <- frames[[verdict_window]]
+  d30 <- frames[[map_window]]
+  ok30 <- is.finite(d30[[prior_col]]) & is.finite(d30$stock_kgm2)
+  a_bias <- mean(d30[[prior_col]][ok30] - d30$stock_kgm2[ok30])
+  a_core <- mean(d30$stock_kgm2[ok30])
+  a_r <- if (sum(ok30) >= 3L)
+    suppressWarnings(stats::cor(d30[[prior_col]][ok30], d30$stock_kgm2[ok30])) else NA_real_
+  anchor_ok <- is.finite(a_bias) && abs(a_bias) <= a_core
+  log_info(sprintf("anchor check at %d cores (0-30 cm): map mean %.1f, core mean %.1f",
+                   sum(ok30), mean(d30[[prior_col]][ok30]), a_core))
+  log_info(sprintf("  bias %+.1f kg/m2 (%.1fx the core mean), correlation with cores %+.2f",
+                   a_bias, abs(a_bias) / a_core, a_r))
+  anchor_note <- sprintf("bias %+.1f kg/m2 = %.1fx core mean; r = %+.2f",
+                         a_bias, abs(a_bias) / a_core, a_r)
+  if (!isTRUE(anchor_ok)) {
+    log_warn(strrep("-", 68))
+    log_warn("THE PRIOR ANCHOR FAILS ITS VALIDITY CHECK.")
+    log_warn(sprintf("  %s reads %.1f kg/m2 where the community cores measure %.1f.",
+                     prior_col, mean(d30[[prior_col]][ok30]), a_core))
+    log_warn(sprintf("  It is wrong by %.1fx the entire quantity being mapped, and its",
+                     abs(a_bias) / a_core))
+    log_warn(sprintf("  correlation with the cores is %+.2f -- so it does not even rank",
+                     a_r))
+    log_warn("  the cores correctly.")
+    log_warn("")
+    log_warn("  The pre-registered fallback to candidate C assumed the anchor was")
+    log_warn("  approximately unbiased. That assumption is now tested and false,")
+    log_warn("  so the fallback moves to candidate S, the design-based stratum")
+    log_warn("  mean. This is a change to the stated rule and it is recorded as")
+    log_warn("  one. It is triggered by a property of the INPUT, measured before")
+    log_warn("  the candidates were scored -- not by which candidate won.")
+    log_warn(strrep("-", 68))
+  }
+}
+
 # =============================================================================
 # 5. Scoring
 # =============================================================================
@@ -360,8 +444,10 @@ log_step("18e  CROSS-VALIDATION")
 
 score_candidate <- function(cand, d) {
   # Every candidate needs longitude/latitude available for the spatial buffer,
-  # even when it does not use them as predictors.
-  cols <- intersect(unique(c(cand$cols, "longitude", "latitude")), names(d))
+  # and the stratum candidate needs `campaign`, even where they are not
+  # predictors.
+  cols <- intersect(unique(c(cand$cols, "longitude", "latitude", "campaign")),
+                    names(d))
   X <- d[, cols, drop = FALSE]
   y <- d$stock_kgm2
   loco <- cv_leave_one_group_out(X, y, d$core_id, cand$fit, cand$pred)
@@ -405,31 +491,35 @@ for (wname in names(frames)) {
 cv_tbl <- do.call(rbind, results)
 rownames(cv_tbl) <- NULL
 
+# A leave-one-stratum-out score is only meaningful if every core got a
+# prediction. Two different things can stop that: a stratum with too few usable
+# cores to train on (the fold is skipped), or a covariate that is missing at a
+# core (that core is never predicted). Either way the score that comes back is
+# computed from whichever cores survived. Those scores are blanked BEFORE the
+# table is printed -- printing them and then blanking them would put the
+# discredited numbers on screen, which is where they get copied from.
+partial_loso <- isTRUE_vec(cv_tbl$loso_cover < 1)
+if (any(partial_loso)) {
+  for (wn in unique(cv_tbl$window[partial_loso])) {
+    i <- partial_loso & cv_tbl$window == wn
+    log_warn(sprintf("%s: leave-one-stratum-out is INCOMPLETE for candidate(s) %s",
+                     wn, paste(cv_tbl$candidate[i], collapse = ", ")))
+    log_warn(sprintf("  %s of %d cores predicted.",
+                     paste(unique(cv_tbl$loso_n[i]), collapse = "/"),
+                     cv_tbl$n[i][1]))
+  }
+  log_warn("  Those r2 values are set to NA rather than printed with a caveat:")
+  log_warn("  a caveat gets dropped when a table is copied into a report, an NA")
+  log_warn("  does not. Left in, a mean-only null can score +0.95 purely because")
+  log_warn("  most of its folds were never run.")
+  cv_tbl$loso_r2[partial_loso]   <- NA_real_
+  cv_tbl$loso_rmse[partial_loso] <- NA_real_
+}
+
 log_info("cross-validated skill, all candidates, both windows:")
 print_table(cv_tbl[, c("window", "candidate", "n", "loco_rmse", "loco_r2",
                        "loso_r2", "loso_n", "sbuf_r2", "sbuf_folds_skipped")],
             digits = 3)
-
-# A leave-one-stratum-out score is only meaningful if every core got a
-# prediction. Where a stratum has one usable core the reverse fold cannot run,
-# and whatever number comes back is computed from the handful of cores that
-# survived. Those scores are blanked here rather than printed with a caveat --
-# a caveat gets dropped when a table is copied into a report; an NA does not.
-partial_loso <- isTRUE_vec(cv_tbl$loso_cover < 1)
-if (any(partial_loso)) {
-  bad_win <- unique(cv_tbl$window[partial_loso])
-  log_warn("leave-one-stratum-out is INCOMPLETE in window(s): ",
-           paste(bad_win, collapse = ", "))
-  log_warn(sprintf(paste0("  only %d of %d cores received a prediction, ",
-                          "because a stratum has too few usable cores to train on."),
-                   min(cv_tbl$loso_n[partial_loso]), cv_tbl$n[partial_loso][1]))
-  log_warn("  Those r2 values are set to NA. Left in, the mean-only null scored")
-  log_warn("  +0.95 in this situation purely because five of its six folds were")
-  log_warn("  never run -- which is exactly the kind of number this workflow ",
-           "exists to refuse.")
-  cv_tbl$loso_r2[partial_loso]   <- NA_real_
-  cv_tbl$loso_rmse[partial_loso] <- NA_real_
-}
 
 if (any(cv_tbl$sbuf_folds_skipped > 0)) {
   log_warn(sprintf(paste0("The spatial-buffer CV skipped folds: a %.1f km ",
@@ -472,23 +562,31 @@ if (nrow(modelled)) {
            "this as PROVISIONAL: a hypothesis for the next field season, not ",
            "a validated map.")
 } else {
-  selected <- if ("C" %in% vt$candidate) "C" else "P"
-  selection_basis <- paste0(
-    "NO candidate cleared the pre-registered bar; falling back to ",
-    if (selected == "C") "the prior-anchored residual correction"
-    else "the published map, uncorrected")
+  selected <- if (isTRUE(anchor_ok) && "C" %in% vt$candidate) "C" else "S"
+  selection_basis <- if (selected == "C") paste0(
+    "NO candidate cleared the pre-registered bar; falling back to the ",
+    "prior-anchored residual correction (anchor passed its validity check)")
+  else paste0(
+    "NO candidate cleared the pre-registered bar, AND the prior anchor failed ",
+    "its validity check (", anchor_note, "); falling back to the design-based ",
+    "stratum mean")
   log_warn(strrep("-", 68))
   log_warn("NO MODEL EARNED THE MAP.")
   log_warn("  This is the expected outcome and it is a result, not a pipeline")
   log_warn("  failure. Eight cores in two clusters cannot identify a covariate")
   log_warn("  relationship that holds across 2,758 km2.")
   log_warn("")
-  log_warn("  The deliverable is therefore candidate ", selected, ": ",
-           if (selected == "C")
-             "the published map, nudged toward the cores near the cores and"
-           else "the published map as-is")
-  log_warn(if (selected == "C")
-             "  returning to the published map everywhere else." else "")
+  if (selected == "C") {
+    log_warn("  The deliverable is therefore candidate C: the published map,")
+    log_warn("  nudged toward the cores near the cores and returning to the")
+    log_warn("  published map everywhere else.")
+  } else {
+    log_warn("  The deliverable is therefore candidate S: each stratum painted")
+    log_warn("  with the mean of the cores measured in it. No satellite layer")
+    log_warn("  enters it, and no published map enters it -- because on this")
+    log_warn("  ground the published maps disagree with the cores by more than")
+    log_warn("  the quantity being mapped.")
+  }
   log_warn("  That is a weaker claim than a fitted map, and it is the claim")
   log_warn("  the data supports.")
   log_warn(strrep("-", 68))
@@ -527,10 +625,25 @@ if (!is.null(imp)) {
              "covariate matters. Install ranger or raise ")
     log_warn("  CFG$step2$imp_budget_sec before quoting this table.")
   } else if (n_sig == 0L) {
-    log_warn("NO covariate beat chance (all p >= 0.05).")
-    log_warn("  The ranking above is a ranking of noise. It is reported in ",
-             "full, rather than truncated to a plausible-looking top three,")
-    log_warn("  precisely so that it cannot be mistaken for a finding.")
+    p_floor <- 1 / (1 + imp$n_null[1])
+    if (p_floor >= 0.05) {
+      # The null was trimmed so far that p < 0.05 was unreachable. Saying "no
+      # covariate beat chance" here would report an absence of evidence as
+      # evidence of absence, when the test simply had no power.
+      log_warn(sprintf(paste0("The permutation null was trimmed to %d draws, ",
+                              "so the smallest p-value"), imp$n_null[1]))
+      log_warn(sprintf("  reachable was %.3f. p < 0.05 was NOT ATTAINABLE, so ",
+                       p_floor))
+      log_warn("  this run did not test whether any covariate beats chance --")
+      log_warn("  it could not have detected one. Do not read the ranking above")
+      log_warn("  as evidence either way. Install ranger, or raise")
+      log_warn("  CFG$step2$imp_budget_sec, and re-run before quoting it.")
+    } else {
+      log_warn("NO covariate beat chance (all p >= 0.05).")
+      log_warn("  The ranking above is a ranking of noise. It is reported in ",
+               "full, rather than truncated to a plausible-looking top three,")
+      log_warn("  precisely so that it cannot be mistaken for a finding.")
+    }
   } else {
     log_ok(n_sig, " covariate(s) beat the permutation null at p < 0.05")
   }
@@ -587,6 +700,40 @@ if (!have_terra || !length(pred_tif)) {
     terra::as.matrix(r[[nm]], wide = TRUE)
   }
 
+  # Stratum labels per pixel, on the predictor raster's own grid, using the
+  # same class-to-stratum mapping as 05. The mapping is a modelling decision,
+  # not a fact, and it carries the caveats recorded in 05_product2_map_lookup.csv.
+  peat_label    <- unique(frames[[verdict_window]]$campaign[
+                     grepl("peat", frames[[verdict_window]]$campaign)])[1]
+  mineral_label <- unique(frames[[verdict_window]]$campaign[
+                     !grepl("peat", frames[[verdict_window]]$campaign)])[1]
+  stratum_raster_vector <- function(n_cells) {
+    srcs <- list(
+      list(path = file.path(CFG$dir_gee, "ccnp_gwl_fcs30_30m.tif"),
+           name = "GWL_FCS30", peat = CFG$gee$gwl_wetland_codes, mineral = 180L),
+      list(path = file.path(CFG$dir_gee, "ccnp_worldcover_30m.tif"),
+           name = "ESA WorldCover", peat = c(30L, 90L), mineral = c(10L, 20L)))
+    srcs <- Filter(function(s) file.exists(s$path), srcs)
+    if (!length(srcs)) return(NULL)
+    s <- srcs[[1]]
+    log_info("candidate S painted from ", basename(s$path), " (", s$name, ")")
+    sr <- terra::rast(s$path)[[1]]
+    sr <- terra::resample(sr, r[[1]], method = "near")
+    v  <- as.vector(t(terra::as.matrix(sr, wide = TRUE)))
+    out <- rep(NA_character_, length(v))
+    out[v %in% s$peat]    <- peat_label
+    out[v %in% s$mineral] <- mineral_label
+    n_unassigned <- sum(is.na(out))
+    if (n_unassigned) {
+      log_warn(sprintf(paste0("%.1f%% of pixels fall in a class the ",
+                              "peat/mineral mapping does not cover; they are"),
+                       100 * n_unassigned / length(out)))
+      log_warn("  left as NA rather than assigned to whichever stratum is ",
+               "nearer in class code.")
+    }
+    out
+  }
+
   surface_for <- function(cand_name, d) {
     cand <- candidates[[cand_name]]
     cols <- intersect(cand$cols, names(d))
@@ -594,6 +741,7 @@ if (!have_terra || !length(pred_tif)) {
                        d$stock_kgm2)
     need <- switch(cand_name,
                    N = character(0),
+                   S = character(0),   # painted from the stratum raster below
                    P = prior_col,
                    C = prior_col,
                    intersect(cand$cols, names(r)))
@@ -614,6 +762,22 @@ if (!have_terra || !length(pred_tif)) {
     latv <- src$ymax - (seq_len(terra::nrow(r)) - 0.5) * src$yres
     nd$longitude <- rep(lonv, times = terra::nrow(r))
     nd$latitude  <- rep(latv, each  = terra::ncol(r))
+
+    # Candidate S is painted from a stratum raster, using EXACTLY the
+    # class-to-stratum mapping script 05 used for Product 2. Duplicating that
+    # mapping here with different codes would produce two maps that disagree
+    # while both claiming to be the stratum means.
+    if (identical(cand_name, "S")) {
+      sr <- stratum_raster_vector(terra::nrow(r) * terra::ncol(r))
+      if (is.null(sr)) {
+        log_warn("candidate S: no stratum raster available; surface not built.")
+        log_warn("  Retrieve ccnp_gwl_fcs30_30m.tif (preferred) or ",
+                 "ccnp_worldcover_30m.tif into ", CFG$dir_gee)
+        return(NULL)
+      }
+      nd$campaign <- sr
+    }
+
     v <- cand$pred(fitted, nd)
     matrix(as.numeric(v), nrow = terra::nrow(r), ncol = terra::ncol(r), byrow = TRUE)
   }

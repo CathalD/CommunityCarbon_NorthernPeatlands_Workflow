@@ -1082,6 +1082,65 @@ local({
   unlink(p)
 })
 
+# =============================================================================
+section("ringfence_categorical -- surviving a layer rename")
+# =============================================================================
+local({
+  # The real failure this guards against: the Earth Engine export was renamed
+  # gwl_fcs30 -> gwl_class between runs, a literal exclusion list stopped
+  # matching, and a wetland CLASS CODE came third in 06's covariate ranking.
+  nms <- c("elevation", "s1_vv", "gwl_class", "gwl_wetland", "worldcover",
+           "tpi_2km")
+  rf <- ringfence_categorical(nms)
+  ok(all(c("gwl_class", "gwl_wetland", "worldcover") %in% rf$categorical),
+     "class-code layers are ring-fenced")
+  ok(all(c("elevation", "s1_vv", "tpi_2km") %in% rf$numeric),
+     "genuine covariates are left alone")
+  ok(!any(c("gwl_class", "worldcover") %in% rf$numeric),
+     "and never appear on both sides")
+
+  # The old name must still be caught, so re-running an older export is safe.
+  ok("gwl_fcs30" %in% ringfence_categorical(c("gwl_fcs30", "ndvi"))$categorical,
+     "the pre-rename name is caught too")
+
+  # A layer that LOOKS categorical but matches no pattern must be surfaced,
+  # not silently passed through as a predictor.
+  sus <- ringfence_categorical(c("elevation", "soil_type_code"))
+  ok("soil_type_code" %in% sus$suspected,
+     "an unmatched but suspicious name is reported for the caller to act on")
+  ok(!length(ringfence_categorical(c("elevation", "ndvi"))$suspected),
+     "ordinary covariate names raise no suspicion")
+})
+
+# =============================================================================
+section("pick_prior_column -- preference order and honest failure")
+# =============================================================================
+local({
+  d <- data.frame(sothe2022_soc_0_30_kgm2 = c(1, 2, 3, 4),
+                  soilgrids_ocs_0_30_kgm2 = c(5, 6, 7, 8),
+                  li2025_peat_carbon_kgm2 = c(9, 9, 9, 9))
+  p <- pick_prior_column(d, c("sothe.*0_30", "soilgrids.*0_30"))
+  eq(p$column == "sothe2022_soc_0_30_kgm2", TRUE,
+     "the first preference wins when it is usable")
+
+  # Too few finite values: fall through to the next preference rather than
+  # returning a column that cannot support a comparison.
+  d2 <- d; d2$sothe2022_soc_0_30_kgm2 <- c(1, NA, NA, NA)
+  p2 <- pick_prior_column(d2, c("sothe.*0_30", "soilgrids.*0_30"))
+  ok(p2$column == "soilgrids_ocs_0_30_kgm2",
+     "a mostly-missing first preference falls through to the second")
+
+  # Li is a full peat column and must never be selected as a 0-30 cm anchor.
+  p3 <- pick_prior_column(d, c("sothe.*0_30"))
+  ok(!identical(p3$column, "li2025_peat_carbon_kgm2"),
+     "a layer outside the preference list is never selected")
+
+  p4 <- pick_prior_column(d, c("nothing_matches_this"))
+  ok(is.na(p4$column), "no match returns NA rather than an arbitrary column")
+  ok(length(p4$considered) == 3,
+     "and reports what WAS present, so the preference list can be fixed")
+})
+
 # ---- summary -----------------------------------------------------------------
 cat("\n", strrep("=", 60), "\n", sep = "")
 cat(sprintf("passed %d   failed %d\n", .pass, .fail))
