@@ -1,0 +1,8 @@
+"metric","value"
+"n_cores",8
+"n_predictors",9
+"loco_rmse_kgm2",3.65157043187495
+"loco_r2_variance_explained",0.00138553603736213
+"loco_r2_squared_correlation",0.00910431024254594
+"null_rmse_kgm2",3.65410275486073
+"beats_null",1

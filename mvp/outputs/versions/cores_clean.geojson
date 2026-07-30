@@ -1,0 +1,15 @@
+{
+"type": "FeatureCollection",
+"name": "cores_clean",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "core_id": "FS-01", "campaign": "mineral", "latitude": 55.965999, "longitude": -87.6282, "lon_repaired": true, "core_depth_cm": 30.0, "stock_kgm2": 14.263004583199999, "any_bd_flagged": false, "n_segments": 3, "stock_is_lower_bound": false }, "geometry": { "type": "Point", "coordinates": [ -87.6282, 55.965999 ] } },
+{ "type": "Feature", "properties": { "core_id": "FS-02", "campaign": "mineral", "latitude": 55.992611, "longitude": -87.62825, "lon_repaired": true, "core_depth_cm": 30.0, "stock_kgm2": 8.3815614381999985, "any_bd_flagged": false, "n_segments": 3, "stock_is_lower_bound": false }, "geometry": { "type": "Point", "coordinates": [ -87.62825, 55.992611 ] } },
+{ "type": "Feature", "properties": { "core_id": "FS-03", "campaign": "mineral", "latitude": 56.128917, "longitude": -87.87181, "lon_repaired": true, "core_depth_cm": 30.0, "stock_kgm2": 4.2223031185000002, "any_bd_flagged": true, "n_segments": 3, "stock_is_lower_bound": false }, "geometry": { "type": "Point", "coordinates": [ -87.87181, 56.128917 ] } },
+{ "type": "Feature", "properties": { "core_id": "FS-04", "campaign": "mineral", "latitude": 56.074278, "longitude": -87.79556, "lon_repaired": true, "core_depth_cm": 30.0, "stock_kgm2": 8.7587719396000008, "any_bd_flagged": false, "n_segments": 3, "stock_is_lower_bound": false }, "geometry": { "type": "Point", "coordinates": [ -87.79556, 56.074278 ] } },
+{ "type": "Feature", "properties": { "core_id": "FS-05", "campaign": "mineral", "latitude": 56.079389, "longitude": -87.75622, "lon_repaired": true, "core_depth_cm": 30.0, "stock_kgm2": 6.105449784, "any_bd_flagged": true, "n_segments": 3, "stock_is_lower_bound": false }, "geometry": { "type": "Point", "coordinates": [ -87.75622, 56.079389 ] } },
+{ "type": "Feature", "properties": { "core_id": "PM-01-A", "campaign": "peat", "latitude": 56.098575, "longitude": -87.67978, "lon_repaired": true, "core_depth_cm": 14.5, "stock_kgm2": 3.0578035, "any_bd_flagged": false, "n_segments": 1, "stock_is_lower_bound": true }, "geometry": { "type": "Point", "coordinates": [ -87.67978, 56.098575 ] } },
+{ "type": "Feature", "properties": { "core_id": "PM-02-A", "campaign": "peat", "latitude": 56.0996361, "longitude": -87.65064, "lon_repaired": true, "core_depth_cm": 20.7, "stock_kgm2": 3.0833445, "any_bd_flagged": false, "n_segments": 2, "stock_is_lower_bound": true }, "geometry": { "type": "Point", "coordinates": [ -87.65064, 56.0996361 ] } },
+{ "type": "Feature", "properties": { "core_id": "PM-03-A", "campaign": "peat", "latitude": 56.1103556, "longitude": -87.67839, "lon_repaired": true, "core_depth_cm": 30.725, "stock_kgm2": 10.194275475, "any_bd_flagged": false, "n_segments": 4, "stock_is_lower_bound": false }, "geometry": { "type": "Point", "coordinates": [ -87.67839, 56.1103556 ] } }
+]
+}
