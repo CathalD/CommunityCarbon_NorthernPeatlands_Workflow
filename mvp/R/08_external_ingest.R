@@ -79,6 +79,16 @@ standardise <- function(df) {
   df[, LAYER_COLS]
 }
 
+#' Sum that returns NA when there is nothing to sum, rather than 0.
+#'
+#' sum(x, na.rm = TRUE) on an all-NA vector returns 0, which silently converts
+#' "this profile has no measurable carbon data" into "this profile contains zero
+#' carbon". That is how NPDB -- where only 5.4% of layers carry a computable
+#' stock, because bulk density is missing from 93% of them -- ended up reporting
+#' a median 0-30 cm stock of exactly 0.00 and dragging every pooled statistic
+#' down with it.
+sum_or_na <- function(x) if (all(is.na(x))) NA_real_ else sum(x, na.rm = TRUE)
+
 # -----------------------------------------------------------------------------
 # 1. CanPeat -- raw layer table, needs unit work
 # -----------------------------------------------------------------------------
@@ -134,7 +144,17 @@ msg("Janousek:      ", nrow(janousek), " layers, ",
 # -----------------------------------------------------------------------------
 # 3. WOSIS -- CANADA SUBSET ONLY
 # -----------------------------------------------------------------------------
-# OrgC arrives in g/kg, so divide by 10 for %. OrgC_Stock is already kg/m2.
+# OrgC arrives in g/kg, so divide by 10 for %.
+#
+# OrgC_Stock IS Mg/ha, NOT kg/m2, so it needs dividing by 10 as well. The
+# supplied 04_combine_all.R states it is already kg/m2 and applies no
+# conversion; that is wrong by exactly a factor of ten. Checked pairwise against
+# a first-principles recomputation on all 102 layers where every input is
+# present: the ratio is 10.000 with min and max both 10.00, which is a unit
+# error rather than scatter. Left uncorrected it made WOSIS report a median
+# 0-30 cm stock of 45.8 kg/m2, which is not physically possible for 30 cm of
+# soil and is what tripped the implausibility warning.
+#
 # The global WOSIS table is deliberately excluded: 92% of it is United States
 # and it would swamp every comparison with irrelevant geography.
 
@@ -149,7 +169,7 @@ wosis <- read_csv(E$file_wosis_layers, show_col_types = FALSE) %>%
     layer_thickness_cm = as.numeric(layer_thickness_cm),
     BDOD               = as.numeric(BDOD),
     OrgC_pct           = as.numeric(OrgC) / 10,            # g/kg -> %
-    stock_kgm2_layer   = as.numeric(OrgC_Stock),           # already kg/m2
+    stock_kgm2_layer   = as.numeric(OrgC_Stock) * 0.1,     # Mg/ha -> kg/m2
     year               = suppressWarnings(as.integer(substr(as.character(date), 1, 4)))
   ) %>% standardise()
 msg("WOSIS Canada:  ", nrow(wosis), " layers, ",
@@ -204,9 +224,10 @@ profiles <- layers %>%
     longitude         = first(longitude),
     year              = first(year),
     n_layers          = n(),
+    n_layers_with_stock = sum(!is.na(stock_kgm2_layer)),
     total_depth_cm    = suppressWarnings(max(lower_depth, na.rm = TRUE)),
-    stock_kgm2_total  = sum(stock_kgm2_layer, na.rm = TRUE),
-    stock_kgm2_0_30   = sum(stock_in_30, na.rm = TRUE),
+    stock_kgm2_total  = sum_or_na(stock_kgm2_layer),
+    stock_kgm2_0_30   = sum_or_na(stock_in_30),
     surface_OrgC_pct  = OrgC_pct[which.min(upper_depth)][1],
     mean_BDOD         = mean(BDOD, na.rm = TRUE),
     .groups = "drop"
@@ -268,9 +289,12 @@ msg(nrow(profiles), " external profiles harmonised; ",
 # -----------------------------------------------------------------------------
 
 msg("--- per dataset ---")
+# with_stock is the column to read first: a dataset can have thousands of
+# profiles and still be unable to give a carbon stock for most of them.
 qc <- profiles %>%
   group_by(dataset) %>%
   summarise(n = n(),
+           with_stock   = sum(!is.na(stock_kgm2_0_30)),
            med_depth_cm = median(total_depth_cm, na.rm = TRUE),
            med_total    = round(median(stock_kgm2_total, na.rm = TRUE), 2),
            med_0_30     = round(median(stock_kgm2_0_30, na.rm = TRUE), 2),
@@ -279,6 +303,18 @@ qc <- profiles %>%
            mineral      = sum(soil_type == "mineral"),
            in_hbl       = sum(in_hbl), .groups = "drop")
 print(as.data.frame(qc))
+
+no_stock <- profiles %>% group_by(dataset) %>%
+  summarise(miss = sum(is.na(stock_kgm2_0_30)), n = n(), .groups = "drop") %>%
+  filter(miss > 0)
+if (nrow(no_stock)) {
+  for (i in seq_len(nrow(no_stock))) {
+    msg("NOTE: ", no_stock$dataset[i], " -- ", no_stock$miss[i], " of ",
+       no_stock$n[i], " profiles carry no computable carbon stock and are NA, ",
+       "not zero. They are excluded from every mean and median rather than ",
+       "counted as carbon-free ground.")
+  }
+}
 
 # A 0-30 cm stock far above ~40 kg/m2 is not physically credible for 30 cm of
 # soil and usually means a unit slipped somewhere. Surface it rather than let

@@ -69,7 +69,7 @@ if (have_eco) {
 lay <- lay %>%
   mutate(dens_kgm2_per_cm = ifelse(is.finite(layer_thickness_cm) & layer_thickness_cm > 0,
                                   stock_kgm2_layer / layer_thickness_cm, NA_real_)) %>%
-  left_join(prof %>% select(dataset, profile_id, soil_type,
+  left_join(prof %>% select(dataset, profile_id, soil_type, in_hbl,
                            any_of(c("gwl_label", "wc_label"))),
            by = c("dataset", "profile_id"))
 
@@ -252,8 +252,25 @@ fig("context_3_bulk_density", {
 # This measures CFG$bayes$shallow_fraction_of_column, which step 06 currently
 # assumes to be 0.15.
 
-group_col <- if (have_eco && "gwl_label" %in% names(lay)) "gwl_label" else "soil_type"
-cum <- cumulative_by_group(lay, group_col, ref = REF)
+# GROUP BY soil_type, NOT BY ECOSYSTEM CLASS. soil_type is known for every
+# profile; GWL_FCS30 returns a class for only ~17% of them, so grouping by it
+# would compute the depth fraction -- the number that feeds back into the map --
+# from a small and non-random minority. It would also silently mix in Janousek's
+# mangrove and salt-marsh profiles from the Gulf coast, which have nothing to say
+# about how carbon is distributed down a Hudson Bay peat column.
+#
+# A dedicated CanPeat-inside-the-Lowlands row is added below, because that is the
+# population the Li et al. prior split actually needs.
+cum <- cumulative_by_group(lay, "soil_type", ref = REF)
+
+lay_hbl_peat <- lay %>%
+  filter(dataset == "CanPeat",
+        profile_id %in% prof$profile_id[prof$dataset == "CanPeat" & prof$in_hbl])
+if (n_distinct(lay_hbl_peat$profile_id) >= 3) {
+  lay_hbl_peat$grp <- "CanPeat peat inside the Lowlands"
+  cum <- c(cum, cumulative_by_group(lay_hbl_peat, "grp", ref = REF))
+}
+
 cum <- cum[!vapply(cum, is.null, logical(1))]
 # Keep the best-supported groups so the figure stays legible.
 cum <- cum[order(vapply(cum, function(x) -x$n_profiles, numeric(1)))]
@@ -298,9 +315,21 @@ shallow_tbl <- tibble(
 write_csv(shallow_tbl, file.path(CFG$dir_current, "shallow_fraction_measured.csv"))
 msg("--- share of the full column above ", REF, " cm (MEASURED) ---")
 print(as.data.frame(shallow_tbl))
+key <- shallow_tbl$measured_share_above_ref[
+  shallow_tbl$group == "CanPeat peat inside the Lowlands"]
 msg("config currently assumes CFG$bayes$shallow_fraction_of_column = ",
-   CFG$bayes$shallow_fraction_of_column,
-   " -- compare against the peat-bearing rows above and update if they disagree.")
+   CFG$bayes$shallow_fraction_of_column)
+if (length(key) && is.finite(key)) {
+  msg(sprintf("MEASURED from CanPeat peat inside the Lowlands: %.3f", key))
+  if (abs(key - CFG$bayes$shallow_fraction_of_column) > 0.02) {
+    msg("  These differ by more than 0.02. That fraction is the single largest ",
+       "assumption in step 06's Bayesian fusion, so set ",
+       "CFG$bayes$shallow_fraction_of_column = ", round(key, 3),
+       " and re-run 05 to 07 before quoting the map.")
+  } else {
+    msg("  The assumption and the measurement agree within 0.02; no change needed.")
+  }
+}
 
 # =============================================================================
 # FIGURE 5  Same groups, two depth windows
