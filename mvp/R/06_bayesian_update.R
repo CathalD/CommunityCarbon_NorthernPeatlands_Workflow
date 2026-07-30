@@ -86,6 +86,19 @@ result <- bayes_update_raster(
   max_influence_km = CFG$bayes$max_influence_km
 )
 
+# Fail with something actionable if bayes_core.R is older than this script.
+# Without this the run dies at `names(result$info_frac) <- ...` with "attempt to
+# set an attribute on NULL", which says nothing about the real cause.
+.want <- c("mean", "sd", "difference", "info_frac", "sd_reduction")
+.absent <- setdiff(.want, names(result))
+if (length(.absent)) {
+  stop("bayes_update_raster() did not return: ", paste(.absent, collapse = ", "),
+      ".\n  mvp/R/bayes_core.R is out of date relative to this script.",
+      "\n  Fix: git pull, then confirm with",
+      "\n    grep -c info_frac mvp/R/bayes_core.R   # expect 1 or more",
+      call. = FALSE)
+}
+
 # A carbon stock cannot be negative. Where a large negative residual sits over
 # a small prior value, the weighted correction can push a pixel below zero --
 # arithmetically fine, physically impossible, and indefensible in something
