@@ -209,6 +209,11 @@ n_hbl_min <- sum(hbl$soil_type == "mineral")
 n_hbl_org <- sum(hbl$soil_type == "organic")
 usable <- prof %>% filter(reaches_30cm, stock_kgm2_0_30 > 0)
 nearest_km <- round(min(usable$dist_fort_severn_km, na.rm = TRUE))
+# The mineral distance is the one that carries the story. There IS comparable
+# PEAT data reasonably close by; what does not exist anywhere nearby is a
+# comparable MINERAL measurement, and conflating the two would overstate the case.
+usable_min <- usable %>% filter(soil_type == "mineral")
+nearest_min_km <- if (nrow(usable_min)) round(min(usable_min$dist_fort_severn_km)) else NA_real_
 
 peat_mean <- mean(ours$stock_kgm2[ours$soil_type == "organic"])
 min_mean  <- mean(ours$stock_kgm2[ours$soil_type == "mineral"])
@@ -241,8 +246,10 @@ brief <- c(
   sprintf("Across every open soil database we could assemble -- the Canadian Peatland Database, the Agriculture Canada National Pedon Database, WOSIS, and a Pacific coastal sediment collection -- there are **%d soil profiles on record inside the Hudson and James Bay Lowlands, and every single one of them is organic soil.** Not one is a mineral soil.",
           n_hbl),
   "",
-  sprintf("**The %d mineral cores collected here are the first mineral soil carbon measurements in the Lowlands in any of these databases.** The nearest place anyone has measured soil carbon in a way that can be compared directly with these cores is **%d km away**.",
-          n_our_min, nearest_km),
+  sprintf("**The %d mineral cores collected here are the first mineral soil carbon measurements in the Lowlands in any of these databases.** The nearest comparable mineral soil measurement anywhere is **%s km away**. There is comparable *peat* data closer than that -- the nearest is %d km -- so the gap these cores fill is specifically a mineral soil gap, not an absence of all data.",
+          n_our_min,
+          if (is.na(nearest_min_km)) "an unknown distance" else format(nearest_min_km, big.mark = ","),
+          nearest_km),
   "",
   "## Three things the cores show",
   "",

@@ -189,6 +189,9 @@ rings <- c(0, E$rings_km)
 ring_lab <- paste0(head(rings, -1), "-", rings[-1])
 
 usable <- all_prof %>% filter(reaches_30cm, stock_kgm2_0_30 > 0)
+# External only -- "how far to the nearest OTHER measurement" must not count
+# our own cores, which sit at 0 km by construction.
+ext_usable <- usable %>% filter(dataset != "Fort Severn")
 tab <- t(vapply(seq_along(ring_lab), function(i) {
   sel <- usable$dist_fort_severn_km > rings[i] & usable$dist_fort_severn_km <= rings[i + 1]
   c(mineral = sum(sel & usable$soil_type == "mineral"),
@@ -203,7 +206,11 @@ fig("compare_datagap_rings", {
                 xlab = "Distance from Fort Severn (km)",
                 ylab = "Profiles with a complete 0-30 cm carbon stock",
                 main = paste0("Where comparable measurements exist, and where they do not",
-                              "\nour cores at 0 km, then no external profile of either kind until 700 km"))
+                              sprintf("\nnearest comparable profile of ANY soil type: %.0f km   |   nearest MINERAL: %s",
+                                      min(ext_usable$dist_fort_severn_km, na.rm = TRUE),
+                                      if (any(ext_usable$soil_type == "mineral"))
+                                        sprintf("%.0f km", min(ext_usable$dist_fort_severn_km[ext_usable$soil_type == "mineral"], na.rm = TRUE))
+                                      else "none")))
   legend("topleft", legend = c("mineral soil", "organic soil"),
          fill = c(COL[["mineral"]], COL[["organic"]]), bty = "n", cex = 0.82)
   # Name the empty rings explicitly -- an absent bar is easy to miss.

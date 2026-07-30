@@ -131,10 +131,23 @@ hold less carbon but because they are a tenth of the depth. Use
 
 Inside the Hudson & James Bay Lowlands, across all four databases combined:
 **86 external profiles, and every one of them is organic.** Zero mineral soil
-profiles. The nearest profile anywhere with a complete, comparable 0–30 cm
-stock is **700 km away**. Step 08 recomputes these numbers on every run and
-writes them to `narrative_stats.csv`, so anything quoted from them is traceable
-rather than remembered.
+profiles.
+
+The distance figures need stating precisely, because the loose version
+overstates the case:
+
+| | Distance |
+|---|---|
+| Nearest comparable profile of **any** soil type | **106 km** (a CanPeat peat core) |
+| Nearest comparable **mineral** profile | **632 km** |
+
+So the gap these cores fill is specifically a **mineral soil** gap — not an
+absence of all nearby data. Comparable peat measurements exist within ~100 km;
+comparable mineral measurements do not exist within ~600 km, and none at all
+exist inside the Lowlands.
+
+Step 08 recomputes all of this on every run into `narrative_stats.csv`, so
+anything quoted is traceable rather than remembered.
 
 ### Steps 11–12: context and community story
 

@@ -81,32 +81,56 @@ xmax_dens <- quantile(lay$dens_kgm2_per_cm, 0.995, na.rm = TRUE)
 # =============================================================================
 
 if (have_eco && "gwl_label" %in% names(lay)) {
-  classes <- names(sort(table(prof$gwl_label), decreasing = TRUE))
+
+  # WHICH CLASS LAYER TO PANEL BY, decided from coverage rather than preference.
+  #
+  # GWL_FCS30 is the better layer in principle -- it is a wetland map, and ESA
+  # WorldCover famously cannot tell treed bog on peat from upland spruce on
+  # mineral soil. But it only returns a class where it has coverage, and on this
+  # point set that turned out to be a minority of profiles. Panelling by a layer
+  # that is missing for most of the data would produce panels built from a
+  # handful of profiles and imply agreement that was never tested.
+  cov_gwl <- mean(!is.na(prof$gwl_label))
+  cov_wc  <- if ("wc_label" %in% names(prof)) mean(!is.na(prof$wc_label)) else 0
+  msg(sprintf("class coverage: GWL_FCS30 %.0f%%, WorldCover %.0f%%",
+             100 * cov_gwl, 100 * cov_wc))
+  class_col <- if (cov_gwl >= 0.5 || cov_gwl >= cov_wc) "gwl_label" else "wc_label"
+  class_name <- if (class_col == "gwl_label") "wetland class (GWL_FCS30)" else
+                  "land cover (ESA WorldCover)"
+  if (cov_gwl < 0.5 && class_col == "wc_label") {
+    msg("GWL_FCS30 covers under half the profiles, so the panels use WorldCover ",
+       "instead. Note the tradeoff: WorldCover cannot separate treed bog on ",
+       "peat from upland forest on mineral soil, which is the distinction this ",
+       "landscape turns on -- read the panels with that in mind.")
+  }
+
+  classes <- names(sort(table(prof[[class_col]]), decreasing = TRUE))
   classes <- head(classes[!is.na(classes)], 6)
-  our_class <- if ("gwl_label" %in% names(prof)) NULL else NULL
   our_eco <- read_csv(eco_path, show_col_types = FALSE) %>%
     filter(dataset == "Fort Severn")
 
   fig("context_1_ecosystem_panels", {
-    op <- par(mfrow = c(2, 3), mar = c(4.0, 4.0, 3.0, 0.8), oma = c(0, 0, 2.6, 0))
+    op <- par(mfrow = c(2, 3), mar = c(4.0, 4.0, 3.0, 0.8), oma = c(0, 0, 3.0, 0))
+    on.exit(par(op), add = TRUE)
     for (cl in classes) {
-      sub <- lay[!is.na(lay$gwl_label) & lay$gwl_label == cl, ]
+      sub <- lay[!is.na(lay[[class_col]]) & lay[[class_col]] == cl, ]
       env_ds <- envelope(sub, "dataset")
       env_ds <- env_ds[!vapply(env_ds, is.null, logical(1))]
       plot(NA, xlim = c(0, xmax_dens), ylim = c(200, 0), xlab = "", ylab = "",
-           main = sprintf("%s\n(%d profiles)", cl, sum(prof$gwl_label == cl, na.rm = TRUE)),
+           main = sprintf("%s\n(%d profiles)", cl, sum(prof[[class_col]] == cl, na.rm = TRUE)),
            cex.main = 0.95)
       grid(col = "grey93", lty = 1)
       for (ds in names(env_ds)) draw_env(env_ds[[ds]], DS_COL[[ds]], lwd = 2.2)
       # Our cores appear only in the panel matching their own class.
-      if (nrow(our_eco) && cl %in% our_eco$gwl_label) {
-        keep <- our_eco$profile_id[our_eco$gwl_label == cl]
+      if (nrow(our_eco) && cl %in% our_eco[[class_col]]) {
+        keep <- our_eco$profile_id[!is.na(our_eco[[class_col]]) & our_eco[[class_col]] == cl]
         draw_our_cores(oseg[oseg$core_id %in% keep, ])
       }
-      if (!length(env_ds)) text(xmax_dens / 2, 100, "fewer than 3 profiles", cex = 0.8, col = "grey45")
+      if (!length(env_ds)) text(xmax_dens / 2, 100, "fewer than 3 profiles",
+                               cex = 0.8, col = "grey45")
     }
-    par(op)
-    mtext("Carbon profiles by wetland class, one colour per study\nbands = 10th-90th percentile   x = kg C/m2 per cm   y = depth (cm)",
+    mtext(sprintf("Carbon profiles by %s, one colour per study\nbands = 10th-90th percentile   x = kg C/m2 per cm   y = depth (cm)",
+                  class_name),
           outer = TRUE, cex = 0.9, font = 2)
   }, width = 2100, height = 1350)
 
@@ -313,6 +337,8 @@ fig("context_5_two_windows", {
 f6 <- prof %>% filter(reaches_30cm, is.finite(stock_kgm2_0_30), stock_kgm2_0_30 > 0,
                      soil_type %in% c("organic", "mineral"))
 
+nearest <- min(f6$dist_fort_severn_km, na.rm = TRUE)
+
 fig("context_6_distance_vs_stock", {
   par(mar = c(4.8, 4.8, 4.2, 1))
   plot(pmax(f6$dist_fort_severn_km, 1), f6$stock_kgm2_0_30, log = "x",
@@ -322,9 +348,12 @@ fig("context_6_distance_vs_stock", {
        xlab = "Distance from Fort Severn (km, log scale)",
        ylab = expression("Carbon stock, 0-30 cm  (kg C m"^-2*")"),
        main = paste0("There is no nearby analogue to borrow from",
-                     "\nnothing comparable inside 500 km, and no trend with distance beyond it"))
+                     sprintf("\nnearest of any soil type %.0f km; nearest MINERAL %s; and no trend with distance beyond",
+                             nearest,
+                             if (any(f6$soil_type == "mineral"))
+                               sprintf("%.0f km", min(f6$dist_fort_severn_km[f6$soil_type == "mineral"], na.rm = TRUE))
+                             else "none")))
   grid(col = "grey93", lty = 1)
-  nearest <- min(f6$dist_fort_severn_km, na.rm = TRUE)
   rect(1, par("usr")[3], nearest, 10^par("usr")[4],
        col = fade("#C1660A", 0.07), border = NA)
   abline(v = nearest, col = "#C1660A", lty = 2, lwd = 1.6)
